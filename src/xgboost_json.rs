@@ -131,13 +131,17 @@ fn convert_model(model: JsonModel) -> Result<XGBModel> {
         .trees
         .into_iter()
         .enumerate()
-        .map(|(tree_idx, tree)| convert_tree(tree_idx, tree))
+        .map(|(tree_idx, tree)| convert_tree(tree_idx, tree, n_features))
         .collect::<Result<Vec<_>>>()?;
 
     XGBModel::new(base_score, n_features, trees)
 }
 
-fn convert_tree(expected_tree_id: usize, tree: JsonTree) -> Result<RegressionTree> {
+fn convert_tree(
+    expected_tree_id: usize,
+    tree: JsonTree,
+    n_features: usize,
+) -> Result<RegressionTree> {
     if tree.id != expected_tree_id {
         return Err(XGBError::InvalidModelFormat(
             "tree id does not match tree position",
@@ -161,13 +165,18 @@ fn convert_tree(expected_tree_id: usize, tree: JsonTree) -> Result<RegressionTre
     validate_tree_len(tree.split_type.len(), num_nodes, "split_type")?;
 
     let nodes = (0..num_nodes)
-        .map(|node_idx| convert_node(&tree, node_idx))
+        .map(|node_idx| convert_node(&tree, node_idx, num_nodes, n_features))
         .collect::<Result<Vec<_>>>()?;
 
     Ok(RegressionTree { nodes })
 }
 
-fn convert_node(tree: &JsonTree, node_idx: usize) -> Result<TreeNode> {
+fn convert_node(
+    tree: &JsonTree,
+    node_idx: usize,
+    num_nodes: usize,
+    n_features: usize,
+) -> Result<TreeNode> {
     let left = tree.left_children[node_idx];
     let right = tree.right_children[node_idx];
 
@@ -182,13 +191,31 @@ fn convert_node(tree: &JsonTree, node_idx: usize) -> Result<TreeNode> {
         });
     }
 
+    let split_feature = tree.split_indices[node_idx] as usize;
+    if split_feature >= n_features {
+        return Err(XGBError::InvalidModelFormat(
+            "split feature index out of bounds",
+        ));
+    }
+
     let left_child = usize::try_from(left)
         .map_err(|_| XGBError::InvalidModelFormat("left child index must be non-negative"))?;
     let right_child = usize::try_from(right)
         .map_err(|_| XGBError::InvalidModelFormat("right child index must be non-negative"))?;
 
+    if left_child >= num_nodes {
+        return Err(XGBError::InvalidModelFormat(
+            "left child index out of bounds",
+        ));
+    }
+    if right_child >= num_nodes {
+        return Err(XGBError::InvalidModelFormat(
+            "right child index out of bounds",
+        ));
+    }
+
     Ok(TreeNode {
-        split_feature: Some(tree.split_indices[node_idx] as usize),
+        split_feature: Some(split_feature),
         split_bin: None,
         split_value: Some(xgb_f32(tree.split_conditions[node_idx])),
         left_child: Some(left_child),
