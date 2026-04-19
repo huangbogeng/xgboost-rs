@@ -63,7 +63,7 @@ pub fn predict_tree(tree: &RegressionTree, features: &DenseMatrix, row_idx: usiz
         let goes_left = if features.is_missing_value(feature_value) {
             node.default_left
         } else {
-            feature_value <= split_value
+            xgb_less_than(feature_value, split_value)
         };
         let next_idx = if goes_left {
             node.left_child
@@ -74,4 +74,12 @@ pub fn predict_tree(tree: &RegressionTree, features: &DenseMatrix, row_idx: usiz
         };
         node_idx = next_idx;
     }
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "official XGBoost tree traversal compares feature values as f32"
+)]
+fn xgb_less_than(feature_value: f64, split_value: f64) -> bool {
+    (feature_value as f32) < (split_value as f32)
 }

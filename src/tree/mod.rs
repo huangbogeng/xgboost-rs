@@ -1,7 +1,5 @@
-//! Tree structures, split scoring, and training.
+//! Tree structures used by inference.
 
-pub mod builder;
-pub mod node;
-pub mod split;
+mod node;
 
 pub use node::{RegressionTree, TreeNode};
