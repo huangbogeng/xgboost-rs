@@ -4,7 +4,7 @@ use std::io;
 /// Crate-local result type.
 pub type Result<T> = std::result::Result<T, XGBError>;
 
-/// Error type for training, prediction, and model I/O.
+/// Error type for model loading and prediction.
 #[derive(Debug)]
 pub enum XGBError {
     /// A shape-related invariant was violated.
@@ -18,18 +18,19 @@ pub enum XGBError {
         name: &'static str,
         reason: &'static str,
     },
-    /// A required non-empty input was empty.
-    EmptyInput(&'static str),
     /// The feature count used for prediction does not match the fitted model.
     FeatureCountMismatch { expected: usize, actual: usize },
-    /// Prediction was requested from a model that has not been fitted yet.
-    ModelNotFitted,
+    /// The model file is structurally invalid for the expected schema.
+    InvalidModelFormat(&'static str),
+    /// The model uses a valid upstream feature that this crate does not support yet.
+    UnsupportedModel {
+        context: &'static str,
+        value: String,
+    },
     /// An underlying I/O operation failed.
     Io(io::Error),
     /// Model serialization or deserialization failed.
     Serde(serde_json::Error),
-    /// Placeholder error for functionality that is intentionally not implemented yet.
-    Unimplemented(&'static str),
 }
 
 impl Display for XGBError {
@@ -46,15 +47,16 @@ impl Display for XGBError {
             Self::InvalidParameter { name, reason } => {
                 write!(f, "invalid parameter `{name}`: {reason}")
             }
-            Self::EmptyInput(context) => write!(f, "empty input for {context}"),
             Self::FeatureCountMismatch { expected, actual } => write!(
                 f,
                 "feature count mismatch: expected {expected}, got {actual}"
             ),
-            Self::ModelNotFitted => write!(f, "model has not been fitted"),
+            Self::InvalidModelFormat(context) => write!(f, "invalid model format: {context}"),
+            Self::UnsupportedModel { context, value } => {
+                write!(f, "unsupported model {context}: {value}")
+            }
             Self::Io(err) => write!(f, "i/o error: {err}"),
             Self::Serde(err) => write!(f, "serialization error: {err}"),
-            Self::Unimplemented(message) => write!(f, "not implemented: {message}"),
         }
     }
 }

@@ -1,12 +1,10 @@
-//! Tree node types used by trained regression trees.
-
-use serde::{Deserialize, Serialize};
+//! Tree node types used by regression tree ensembles.
 
 /// One node in a regression tree.
 ///
 /// A node is either a leaf with `leaf_value`, or a split node with child
 /// indices and split metadata.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TreeNode {
     pub split_feature: Option<usize>,
     pub split_bin: Option<usize>,
@@ -34,7 +32,7 @@ impl TreeNode {
 }
 
 /// One trained regression tree.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RegressionTree {
     pub nodes: Vec<TreeNode>,
 }

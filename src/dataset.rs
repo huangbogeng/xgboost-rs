@@ -1,6 +1,4 @@
-//! Dense dataset types used for training and prediction.
-
-use serde::{Deserialize, Serialize};
+//! Dense dataset types used for inference.
 
 use crate::error::{Result, XGBError};
 
@@ -9,7 +7,7 @@ use crate::error::{Result, XGBError};
 /// Values are stored in a contiguous `Vec<f64>` using row-major layout.
 /// Missing values are detected by either `NaN` or the optional explicit
 /// sentinel configured in [`Self::with_missing`].
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DenseMatrix {
     n_rows: usize,
     n_cols: usize,
@@ -112,82 +110,13 @@ impl DenseMatrix {
     }
 }
 
-/// Labeled training matrix.
-///
-/// This type owns both dense features and regression targets. Prediction uses
-/// [`DenseMatrix`] directly because labels are not needed there.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct DMatrix {
-    features: DenseMatrix,
-    labels: Vec<f64>,
-}
-
-impl DMatrix {
-    /// Create a labeled training matrix.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if either side is empty or if the row count does not
-    /// match the label count.
-    pub fn from_dense(features: DenseMatrix, labels: Vec<f64>) -> Result<Self> {
-        if features.n_rows() == 0 {
-            return Err(XGBError::EmptyInput("training features"));
-        }
-
-        if labels.is_empty() {
-            return Err(XGBError::EmptyInput("training labels"));
-        }
-
-        if features.n_rows() != labels.len() {
-            return Err(XGBError::InvalidShape {
-                context: "labels",
-                expected: features.n_rows(),
-                actual: labels.len(),
-            });
-        }
-
-        Ok(Self { features, labels })
-    }
-
-    /// Borrow the dense feature matrix.
-    #[must_use]
-    pub fn features(&self) -> &DenseMatrix {
-        &self.features
-    }
-
-    /// Borrow the target labels.
-    #[must_use]
-    pub fn labels(&self) -> &[f64] {
-        &self.labels
-    }
-
-    /// Return the number of rows.
-    #[must_use]
-    pub fn n_rows(&self) -> usize {
-        self.features.n_rows()
-    }
-
-    /// Return the number of feature columns.
-    #[must_use]
-    pub fn n_cols(&self) -> usize {
-        self.features.n_cols()
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{DMatrix, DenseMatrix};
+    use super::DenseMatrix;
 
     #[test]
     fn matrix_shape_must_match_input_length() {
         let result = DenseMatrix::from_shape_vec(2, 2, vec![1.0, 2.0, 3.0]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn labels_must_match_row_count() {
-        let features = DenseMatrix::from_shape_vec(2, 2, vec![1.0, 2.0, 3.0, 4.0]).unwrap();
-        let result = DMatrix::from_dense(features, vec![1.0]);
         assert!(result.is_err());
     }
 }

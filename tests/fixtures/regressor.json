@@ -1,0 +1,80 @@
+{
+  "learner": {
+    "attributes": {},
+    "feature_names": [],
+    "feature_types": [],
+    "gradient_booster": {
+      "model": {
+        "gbtree_model_param": {
+          "num_parallel_tree": "1",
+          "num_trees": "2"
+        },
+        "iteration_indptr": [0, 1, 2],
+        "tree_info": [0, 0],
+        "trees": [
+          {
+            "base_weights": [-1.117401e-8, -0.27012718, 0.31956217, -0.13428491, -0.00042649408, -0.06001738, 0.13094717],
+            "categories": [],
+            "categories_nodes": [],
+            "categories_segments": [],
+            "categories_sizes": [],
+            "default_left": [0, 0, 0, 0, 0, 0, 0],
+            "id": 0,
+            "left_children": [1, 3, 5, -1, -1, -1, -1],
+            "loss_changes": [86.49507, 25.896297, 27.975399, 0.0, 0.0, 0.0, 0.0],
+            "parents": [2147483647, 0, 0, 1, 1, 2, 2],
+            "right_children": [2, 4, 6, -1, -1, -1, -1],
+            "split_conditions": [0.15932372, 0.42627653, -1.2470143, -0.13428491, -0.00042649408, -0.06001738, 0.13094717],
+            "split_indices": [2, 1, 1, 0, 0, 0, 0],
+            "split_type": [0, 0, 0, 0, 0, 0, 0],
+            "sum_hessian": [1000.0, 542.0, 458.0, 326.0, 216.0, 84.0, 374.0],
+            "tree_param": {
+              "num_deleted": "0",
+              "num_feature": "3",
+              "num_nodes": "7",
+              "size_leaf_vector": "1"
+            }
+          },
+          {
+            "base_weights": [-6.371168e-5, -0.15287511, 0.33475894, -0.088121556, 0.016029611, 0.031154847, 0.14547335],
+            "categories": [],
+            "categories_nodes": [],
+            "categories_segments": [],
+            "categories_sizes": [],
+            "default_left": [0, 0, 0, 0, 0, 0, 0],
+            "id": 1,
+            "left_children": [1, 3, 5, -1, -1, -1, -1],
+            "loss_changes": [51.267056, 20.00975, 10.8365135, 0.0, 0.0, 0.0, 0.0],
+            "parents": [2147483647, 0, 0, 1, 1, 2, 2],
+            "right_children": [2, 4, 6, -1, -1, -1, -1],
+            "split_conditions": [0.7101826, 0.42627653, -0.5257713, -0.088121556, 0.016029611, 0.031154847, 0.14547335],
+            "split_indices": [2, 1, 1, 0, 0, 0, 0],
+            "split_type": [0, 0, 0, 0, 0, 0, 0],
+            "sum_hessian": [1000.0, 687.0, 313.0, 408.0, 279.0, 124.0, 189.0],
+            "tree_param": {
+              "num_deleted": "0",
+              "num_feature": "3",
+              "num_nodes": "7",
+              "size_leaf_vector": "1"
+            }
+          }
+        ]
+      },
+      "name": "gbtree"
+    },
+    "learner_model_param": {
+      "base_score": "5.0801497E-2",
+      "boost_from_average": "1",
+      "num_class": "0",
+      "num_feature": "3",
+      "num_target": "1"
+    },
+    "objective": {
+      "name": "reg:squarederror",
+      "reg_loss_param": {
+        "scale_pos_weight": "1"
+      }
+    }
+  },
+  "version": [3, 0, 2]
+}

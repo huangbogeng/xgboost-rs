@@ -1,16 +1,18 @@
 # xgboost-rs
 
-`xgboost-rs` is a focused Rust project for loading official XGBoost model files and running inference.
+`xgboost-rs` is a focused Rust project for loading official `XGBoost` model files and running inference.
 
-The repository is being refocused away from a full training implementation. The target is a small, dependable runtime for models produced by upstream XGBoost.
+The repository is being refocused away from a full training implementation. The public crate API is now inference-first.
 
 ## Goal
 
-The first release target is intentionally narrow:
+The current supported scope is intentionally narrow:
 
 - Load official XGBoost `save_model("model.json")` outputs
 - Support `booster=gbtree`
 - Support `objective=reg:squarederror`
+- Support single-target regression
+- Support numerical splits only
 - Run CPU inference on dense in-memory `f64` features
 - Respect XGBoost missing-value routing through each node's default branch
 
@@ -25,26 +27,16 @@ The first release target is intentionally narrow:
 
 ## Current Status
 
-The codebase already contains reusable tree and prediction components, but official XGBoost model loading is not finished yet.
+The public crate API now exposes an inference-only model type:
 
-In particular:
+- `XGBModel::load_json(...)` loads supported official upstream `model.json` files
+- `XGBModel::predict_dense(...)` runs dense CPU inference
+- `XGBModel::new(...)` is available for tests and custom adapters that already have tree data
+- the old training API is no longer exported from the crate root
 
-- `src/predict.rs` and `src/tree/node.rs` are good foundations for inference
-- `DenseMatrix` in `src/dataset.rs` is reusable for prediction input
-- the current JSON I/O only round-trips this crate's internal Rust structs
-- loading official XGBoost `model.json` files is the next major implementation step
+## Quick Start
 
-## Planned Runtime Shape
-
-The intended flow is:
-
-1. Parse official XGBoost `model.json`
-2. Convert the array-oriented tree data into compact Rust tree structs
-3. Reuse the internal tree traversal code for prediction
-
-The expected public API will look roughly like this:
-
-```rust,ignore
+```rust,no_run
 use xgboost_rs::{DenseMatrix, XGBModel};
 
 fn main() -> Result<(), xgboost_rs::XGBError> {
@@ -56,14 +48,11 @@ fn main() -> Result<(), xgboost_rs::XGBError> {
 }
 ```
 
-This example describes the target API for the refocused project, not the current implementation.
-
 ## Roadmap
 
-1. Add an inference-only model type for loaded XGBoost models
-2. Implement official XGBoost `model.json` parsing for `gbtree` regression
-3. Add fixture-based tests with real exported upstream models
-4. Extend support only when the inference core is stable
+1. Extend official model support beyond `reg:squarederror`
+2. Add `.ubj` loading support
+3. Add more fixture coverage for official upstream models
 
 ## Development
 

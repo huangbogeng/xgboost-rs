@@ -1,58 +1,65 @@
-//! A small Rust implementation of the `XGBoost` core for regression.
+//! Inference-focused Rust runtime for tree models inspired by `XGBoost`.
 //!
-//! The current crate focuses on one constrained use case:
+//! The public API is being migrated away from training and toward model loading
+//! and prediction. During this transition, the crate exposes an inference-only
+//! [`XGBModel`] together with reusable dense feature and tree types.
 //!
-//! - CPU-only training
+//! The current public surface focuses on:
+//!
 //! - dense in-memory `f64` input
-//! - histogram-based tree construction
-//! - squared-error regression
-//! - prediction and JSON model I/O
+//! - tree-ensemble prediction
+//! - official upstream `model.json` loading for a narrow regression subset
+//! - explicit tree construction for tests and adapters
 //!
-//! It is intentionally not a feature-complete port of upstream `XGBoost`.
+//! Current official model support is intentionally narrow:
+//!
+//! - `booster=gbtree`
+//! - `objective=reg:squarederror`
+//! - single-target regression
+//! - numerical splits only
 //!
 //! # Example
 //!
 //! ```rust,no_run
-//! use xgboost_rs::{DMatrix, DenseMatrix, XGBRegressor};
+//! use xgboost_rs::{DenseMatrix, RegressionTree, TreeNode, XGBModel};
 //!
 //! # fn main() -> Result<(), xgboost_rs::XGBError> {
-//! let features = DenseMatrix::from_shape_vec(4, 1, vec![0.0, 1.0, 2.0, 3.0])?;
-//! let train = DMatrix::from_dense(features.clone(), vec![0.0, 0.0, 1.0, 1.0])?;
+//! let features = DenseMatrix::from_shape_vec(2, 1, vec![0.0, 2.0])?;
+//! let tree = RegressionTree {
+//!     nodes: vec![
+//!         TreeNode {
+//!             split_feature: Some(0),
+//!             split_bin: None,
+//!             split_value: Some(1.0),
+//!             left_child: Some(1),
+//!             right_child: Some(2),
+//!             leaf_value: None,
+//!             default_left: true,
+//!         },
+//!         TreeNode::leaf(-0.5),
+//!         TreeNode::leaf(0.5),
+//!     ],
+//! };
 //!
-//! let model = XGBRegressor::builder()
-//!     .n_estimators(1)
-//!     .max_depth(1)
-//!     .learning_rate(1.0)
-//!     .max_bin(4)
-//!     .lambda(0.0)
-//!     .gamma(0.0)
-//!     .min_child_weight(0.0)
-//!     .build()?;
-//!
-//! let fitted = model.fit(&train)?;
-//! let predictions = fitted.predict_dense(&features)?;
-//! assert_eq!(predictions, vec![0.0, 0.0, 1.0, 1.0]);
+//! let model = XGBModel::new(0.5, 1, vec![tree])?;
+//! let predictions = model.predict_dense(&features)?;
+//! assert_eq!(predictions, vec![0.0, 1.0]);
 //! # Ok(())
 //! # }
 //! ```
 
-pub mod booster;
-pub mod dataset;
-pub mod error;
-pub mod grad;
-pub mod hist;
-pub mod metrics;
-pub mod model_io;
-pub mod objective;
-pub mod params;
-pub mod predict;
-pub mod tree;
+mod dataset;
+mod error;
+mod model;
+mod predict;
+mod tree;
+mod xgboost_json;
 
-/// Regression model and training entry point.
-pub use booster::gbtree::XGBRegressor;
-/// Dense training and prediction datasets.
-pub use dataset::{DMatrix, DenseMatrix};
+/// Dense prediction input.
+pub use dataset::DenseMatrix;
 /// Common result and error types used across the crate.
 pub use error::{Result, XGBError};
-/// Parameter types and builder for [`XGBRegressor`].
-pub use params::{XGBRegressorBuilder, XGBRegressorParams};
+/// Inference-only model surface.
+pub use model::XGBModel;
+/// Tree types reusable by adapters and tests.
+pub use tree::{RegressionTree, TreeNode};
