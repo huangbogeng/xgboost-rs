@@ -1,22 +1,22 @@
-//! Inference-focused Rust runtime for tree models inspired by `XGBoost`.
+//! Rust inference runtime for supported official `XGBoost` `model.json` files.
 //!
-//! The public API is being migrated away from training and toward model loading
-//! and prediction. During this transition, the crate exposes an inference-only
-//! [`XGBModel`] together with reusable dense feature and tree types.
+//! The crate is intentionally narrow in scope. It focuses on loading supported
+//! official models and running CPU prediction with explicit unsupported-model
+//! errors for everything outside that boundary.
 //!
-//! The current public surface focuses on:
+//! Current support:
 //!
-//! - dense in-memory `f64` input
-//! - tree-ensemble prediction
-//! - official upstream `model.json` loading for a narrow inference subset
-//! - explicit tree construction for tests and adapters
-//!
-//! Current official model support is intentionally narrow:
-//!
+//! - official `save_model("model.json")` input
 //! - `booster=gbtree`
-//! - `objective=reg:squarederror` or `objective=binary:logistic`
-//! - single-target prediction
+//! - `objective=reg:squarederror` and `objective=binary:logistic`
+//! - single-target regression and binary classification
 //! - numerical splits only
+//! - dense in-memory `f64` features
+//!
+//! `XGBModel::predict_dense(...)` returns task outputs:
+//!
+//! - regression predictions for `reg:squarederror`
+//! - positive-class probabilities for `binary:logistic`
 //!
 //! # Example
 //!
