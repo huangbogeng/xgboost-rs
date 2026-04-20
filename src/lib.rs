@@ -8,8 +8,9 @@
 //!
 //! - official `save_model("model.json")` input
 //! - `booster=gbtree`
-//! - `objective=reg:squarederror` and `objective=binary:logistic`
-//! - single-target regression and binary classification
+//! - `objective=reg:squarederror`, `objective=binary:logistic`,
+//!   `objective=multi:softprob`, and `objective=multi:softmax`
+//! - single-target regression, binary classification, and multiclass classification
 //! - numerical splits only
 //! - dense in-memory `f64` features
 //!
@@ -17,6 +18,8 @@
 //!
 //! - regression predictions for `reg:squarederror`
 //! - positive-class probabilities for `binary:logistic`
+//! - row-major class probabilities for `multi:softprob`
+//! - class labels encoded as `f64` for `multi:softmax`
 //!
 //! # Example
 //!
