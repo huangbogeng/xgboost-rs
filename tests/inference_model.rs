@@ -1,4 +1,4 @@
-use xgboost_rs::{DenseMatrix, RegressionTree, TreeNode, XGBError, XGBModel};
+use xgboost_rs::{BoosterTree, DenseMatrix, TreeNode, XgbError, XgbModel};
 
 fn assert_vec_close(actual: &[f64], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len());
@@ -10,7 +10,7 @@ fn assert_vec_close(actual: &[f64], expected: &[f64]) {
 #[test]
 fn predicts_base_score_without_any_trees() {
     let features = DenseMatrix::from_shape_vec(2, 2, vec![1.0, 2.0, 3.0, 4.0]).unwrap();
-    let model = XGBModel::new(1.5, 2, Vec::new()).unwrap();
+    let model = XgbModel::new(1.5, 2, Vec::new()).unwrap();
 
     let predictions = model.predict_dense(&features).unwrap();
 
@@ -20,10 +20,10 @@ fn predicts_base_score_without_any_trees() {
 #[test]
 fn split_tree_routes_missing_values_and_numeric_values() {
     let features = DenseMatrix::with_missing(3, 1, vec![-1.0, 0.5, 2.0], Some(-1.0)).unwrap();
-    let model = XGBModel::new(
+    let model = XgbModel::new(
         0.25,
         1,
-        vec![RegressionTree {
+        vec![BoosterTree {
             nodes: vec![
                 TreeNode {
                     split_feature: Some(0),
@@ -49,13 +49,13 @@ fn split_tree_routes_missing_values_and_numeric_values() {
 #[test]
 fn rejects_feature_count_mismatch() {
     let features = DenseMatrix::from_shape_vec(1, 1, vec![1.0]).unwrap();
-    let model = XGBModel::new(0.5, 2, Vec::new()).unwrap();
+    let model = XgbModel::new(0.5, 2, Vec::new()).unwrap();
 
     let error = model.predict_dense(&features).unwrap_err();
 
     assert!(matches!(
         error,
-        XGBError::FeatureCountMismatch {
+        XgbError::FeatureCountMismatch {
             expected: 2,
             actual: 1
         }
