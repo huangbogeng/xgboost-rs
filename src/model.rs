@@ -12,6 +12,17 @@ use crate::xgboost_json;
 pub(crate) enum Objective {
     Regression,
     BinaryLogistic,
+    MultiSoftprob { num_class: usize },
+    MultiSoftmax { num_class: usize },
+}
+
+impl Objective {
+    pub(crate) fn output_groups(self) -> usize {
+        match self {
+            Self::Regression | Self::BinaryLogistic => 1,
+            Self::MultiSoftprob { num_class } | Self::MultiSoftmax { num_class } => num_class,
+        }
+    }
 }
 
 /// Inference-only gradient-boosted tree model.
@@ -22,7 +33,8 @@ pub(crate) enum Objective {
 #[derive(Debug, Clone, PartialEq)]
 pub struct XgbModel {
     trees: Vec<BoosterTree>,
-    base_margin: f64,
+    tree_info: Vec<usize>,
+    base_margins: Vec<f64>,
     n_features: usize,
     objective: Objective,
 }
@@ -35,20 +47,52 @@ impl XgbModel {
     /// Returns [`XgbError::InvalidParameter`] if `base_score` is not finite or
     /// if `n_features == 0`.
     pub fn new(base_score: f64, n_features: usize, trees: Vec<BoosterTree>) -> Result<Self> {
-        Self::from_parts(Objective::Regression, base_score, n_features, trees)
+        let tree_info = vec![0; trees.len()];
+        Self::from_parts(
+            Objective::Regression,
+            vec![base_score],
+            n_features,
+            trees,
+            tree_info,
+        )
     }
 
     pub(crate) fn from_parts(
         objective: Objective,
-        base_margin: f64,
+        base_margins: Vec<f64>,
         n_features: usize,
         trees: Vec<BoosterTree>,
+        tree_info: Vec<usize>,
     ) -> Result<Self> {
-        if !base_margin.is_finite() {
+        let expected_groups = objective.output_groups();
+
+        if base_margins.len() != expected_groups {
+            return Err(XgbError::InvalidShape {
+                context: "base_score",
+                expected: expected_groups,
+                actual: base_margins.len(),
+            });
+        }
+
+        if !base_margins.iter().all(|value| value.is_finite()) {
             return Err(XgbError::InvalidParameter {
                 name: "base_score",
                 reason: "must be finite",
             });
+        }
+
+        if tree_info.len() != trees.len() {
+            return Err(XgbError::InvalidShape {
+                context: "tree_info",
+                expected: trees.len(),
+                actual: tree_info.len(),
+            });
+        }
+
+        if tree_info.iter().any(|group| *group >= expected_groups) {
+            return Err(XgbError::InvalidModelFormat(
+                "tree_info contains out-of-range output group index",
+            ));
         }
 
         if n_features == 0 {
@@ -60,19 +104,31 @@ impl XgbModel {
 
         Ok(Self {
             trees,
-            base_margin,
+            tree_info,
+            base_margins,
             n_features,
             objective,
         })
     }
 
-    /// Return the serialized `XGBoost` `base_score` for supported objectives.
+    /// Return the scalar `base_score` for scalar objectives.
+    ///
+    /// For multiclass objectives this returns the class-0 base margin.
     #[must_use]
     pub fn base_score(&self) -> f64 {
         match self.objective {
-            Objective::Regression => self.base_margin,
-            Objective::BinaryLogistic => inference::sigmoid(self.base_margin),
+            Objective::Regression => self.base_margins[0],
+            Objective::BinaryLogistic => inference::sigmoid(self.base_margins[0]),
+            Objective::MultiSoftprob { .. } | Objective::MultiSoftmax { .. } => {
+                self.base_margins[0]
+            }
         }
+    }
+
+    /// Return the base margins used to initialize each output group.
+    #[must_use]
+    pub fn base_margins(&self) -> &[f64] {
+        &self.base_margins
     }
 
     /// Return the number of feature columns expected by this model.
@@ -93,6 +149,8 @@ impl XgbModel {
     ///
     /// - regression values for `reg:squarederror`
     /// - positive-class probabilities for `binary:logistic`
+    /// - class probabilities (row-major) for `multi:softprob`
+    /// - class labels encoded as `f64` for `multi:softmax`
     ///
     /// # Errors
     ///
@@ -101,7 +159,8 @@ impl XgbModel {
     pub fn predict_dense(&self, features: &DenseMatrix) -> Result<Vec<f64>> {
         inference::predict_dense(
             self.objective,
-            self.base_margin,
+            &self.base_margins,
+            &self.tree_info,
             &self.trees,
             features,
             self.n_features,
@@ -113,7 +172,8 @@ impl XgbModel {
     /// Currently supported model scope:
     ///
     /// - `booster=gbtree`
-    /// - `objective=reg:squarederror` or `objective=binary:logistic`
+    /// - `objective=reg:squarederror`, `objective=binary:logistic`,
+    ///   `objective=multi:softprob`, and `objective=multi:softmax`
     /// - single-target prediction
     /// - numerical splits only
     ///
