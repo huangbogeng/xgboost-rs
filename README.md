@@ -28,8 +28,8 @@ That makes `xgboost-rs` a good fit when you want a Rust-native inference path wi
 | :--- | :--- |
 | **Model input** | Official `save_model("model.json")` output |
 | **Booster** | `gbtree` |
-| **Objectives** | `reg:squarederror`, `binary:logistic` |
-| **Outputs** | Single-target regression, binary classification |
+| **Objectives** | `reg:squarederror`, `binary:logistic`, `multi:softprob`, `multi:softmax` |
+| **Outputs** | Single-target regression, binary classification, multiclass classification |
 | **Splits** | Numerical splits only |
 | **Inference** | CPU, dense in-memory `f64` features |
 | **Missing values** | Honors each node's `default_left` routing |
@@ -42,15 +42,16 @@ That makes `xgboost-rs` a good fit when you want a Rust-native inference path wi
 | :--- | :--- |
 | `reg:squarederror` | Regression prediction |
 | `binary:logistic` | Positive-class probability |
+| `multi:softprob` | Row-major class probabilities (shape: `n_rows * num_class`) |
+| `multi:softmax` | Predicted class labels encoded as `f64` |
 
-For supported binary models, serialized `base_score` is interpreted using XGBoost's logistic semantics before inference.
+For supported binary models, serialized `base_score` is interpreted using XGBoost's logistic semantics before inference. Multiclass fixtures with vector `base_score` are interpreted as per-class base margins.
 
 ## 🚫 Out of Scope
 
 The crate does **not** currently support:
 
 - Anything other than official `model.json`
-- Multiclass objectives
 - `dart` or `gblinear`
 - Categorical splits
 - Multi-output trees
@@ -96,9 +97,7 @@ fn main() -> Result<(), xgboost_rs::XgbError> {
 
 ## 🛤️ Current Direction
 
-The next major compatibility step is **multiclass `gbtree` support** for official `model.json` models.
-
-Until then, the project is focused on strengthening the supported path through:
+The project is focused on strengthening the supported path through:
 - Broader fixture coverage
 - Better loader validation
 - Continued alignment with official model semantics
