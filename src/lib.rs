@@ -51,9 +51,9 @@
 mod dataset;
 mod error;
 mod model;
+mod official_model;
 mod predict;
 mod tree;
-mod xgboost_json;
 
 /// Dense prediction input.
 pub use dataset::DenseMatrix;
