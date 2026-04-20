@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::error::{Result, XGBError};
-use crate::model::XGBModel;
+use crate::model::{PredictionTask, XGBModel};
 use crate::tree::{RegressionTree, TreeNode};
 
 use super::schema::{JsonModel, JsonTree};
@@ -21,12 +21,7 @@ pub(super) fn convert_model(model: JsonModel) -> Result<XGBModel> {
         });
     }
 
-    if model.learner.objective.name != "reg:squarederror" {
-        return Err(XGBError::UnsupportedModel {
-            context: "objective",
-            value: model.learner.objective.name,
-        });
-    }
+    let task = parse_prediction_task(&model.learner.objective.name)?;
 
     let num_target = parse_usize_field(
         &model.learner.model_param.num_target,
@@ -61,7 +56,7 @@ pub(super) fn convert_model(model: JsonModel) -> Result<XGBModel> {
         });
     }
 
-    let base_score = parse_base_score(&model.learner.model_param.base_score)?;
+    let base_margin = parse_base_score(&model.learner.model_param.base_score, task)?;
     let n_features = parse_usize_field(
         &model.learner.model_param.num_feature,
         "learner_model_param.num_feature",
@@ -76,7 +71,18 @@ pub(super) fn convert_model(model: JsonModel) -> Result<XGBModel> {
         .map(|(tree_idx, tree)| convert_tree(tree_idx, tree, n_features))
         .collect::<Result<Vec<_>>>()?;
 
-    XGBModel::new(base_score, n_features, trees)
+    XGBModel::from_parts(task, base_margin, n_features, trees)
+}
+
+fn parse_prediction_task(objective: &str) -> Result<PredictionTask> {
+    match objective {
+        "reg:squarederror" => Ok(PredictionTask::Regression),
+        "binary:logistic" => Ok(PredictionTask::BinaryLogistic),
+        _ => Err(XGBError::UnsupportedModel {
+            context: "objective",
+            value: objective.to_owned(),
+        }),
+    }
 }
 
 fn convert_tree(
@@ -168,20 +174,28 @@ fn convert_node(
     })
 }
 
-fn parse_base_score(raw: &str) -> Result<f64> {
+fn parse_base_score(raw: &str, task: PredictionTask) -> Result<f64> {
     if let Ok(value) = raw.parse::<f64>() {
-        return Ok(xgb_f32(value));
+        return parse_base_score_value(value, task);
     }
 
     if let Ok(values) = serde_json::from_str::<Vec<f64>>(raw) {
         if values.len() == 1 {
-            return Ok(xgb_f32(values[0]));
+            return parse_base_score_value(values[0], task);
         }
     }
 
     Err(XGBError::InvalidModelFormat(
         "base_score must be a scalar or a single-element vector",
     ))
+}
+
+fn parse_base_score_value(value: f64, task: PredictionTask) -> Result<f64> {
+    let base_score = xgb_f32(value);
+    match task {
+        PredictionTask::Regression => Ok(base_score),
+        PredictionTask::BinaryLogistic => logit(base_score),
+    }
 }
 
 fn parse_usize_field(raw: &str, context: &'static str) -> Result<usize> {
@@ -235,6 +249,8 @@ fn validate_reachable_subtree(
     visit_state: &mut [VisitState],
     indegree: &mut [usize],
 ) -> Result<()> {
+    // TODO: Replace this recursive walk with an explicit stack so valid but
+    // highly unbalanced trees cannot overflow the loader's call stack.
     match visit_state[node_idx] {
         VisitState::Unvisited => {}
         VisitState::Visiting => {
@@ -311,4 +327,14 @@ fn xgb_f32(value: f64) -> f64 {
         reason = "official XGBoost JSON stores and evaluates tree values as f32"
     )]
     f64::from(value as f32)
+}
+
+fn logit(probability: f64) -> Result<f64> {
+    if !(0.0..1.0).contains(&probability) {
+        return Err(XGBError::InvalidModelFormat(
+            "binary:logistic base_score must be strictly between 0 and 1",
+        ));
+    }
+
+    Ok((probability / (1.0 - probability)).ln())
 }

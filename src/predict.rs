@@ -2,18 +2,21 @@
 
 use crate::dataset::DenseMatrix;
 use crate::error::{Result, XGBError};
+use crate::model::PredictionTask;
 use crate::tree::RegressionTree;
 
 /// Predict a batch of rows using a fitted tree ensemble.
 ///
-/// Predictions start from `base_score` and then add the contribution of each tree.
+/// Predictions start from `base_margin`, then add the contribution of each tree,
+/// and finally apply the supported task-specific output transform.
 ///
 /// # Errors
 ///
 /// Returns [`XGBError::FeatureCountMismatch`] if `features` does not match the
 /// expected number of feature columns.
 pub fn predict_ensemble(
-    base_score: f64,
+    task: PredictionTask,
+    base_margin: f64,
     trees: &[RegressionTree],
     features: &DenseMatrix,
     expected_feature_count: usize,
@@ -25,11 +28,16 @@ pub fn predict_ensemble(
         });
     }
 
-    let mut predictions = vec![base_score; features.n_rows()];
+    let mut predictions = vec![base_margin; features.n_rows()];
     for (row_idx, prediction) in predictions.iter_mut().enumerate() {
         for tree in trees {
             *prediction += predict_tree(tree, features, row_idx);
         }
+
+        *prediction = match task {
+            PredictionTask::Regression => *prediction,
+            PredictionTask::BinaryLogistic => sigmoid(*prediction),
+        };
     }
 
     Ok(predictions)
@@ -82,4 +90,15 @@ pub fn predict_tree(tree: &RegressionTree, features: &DenseMatrix, row_idx: usiz
 )]
 fn xgb_less_than(feature_value: f64, split_value: f64) -> bool {
     (feature_value as f32) < (split_value as f32)
+}
+
+#[must_use]
+pub(crate) fn sigmoid(value: f64) -> f64 {
+    if value >= 0.0 {
+        let exp_neg = (-value).exp();
+        1.0 / (1.0 + exp_neg)
+    } else {
+        let exp_pos = value.exp();
+        exp_pos / (1.0 + exp_pos)
+    }
 }
