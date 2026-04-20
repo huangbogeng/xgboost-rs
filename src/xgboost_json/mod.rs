@@ -29,6 +29,7 @@ mod tests {
     }},
     "learner_model_param": {{
       "base_score": "0.5",
+      "num_class": "0",
       "num_feature": "1",
       "num_target": "1"
     }},

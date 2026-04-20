@@ -28,6 +28,7 @@ pub(super) struct GbtreeModel {
 #[derive(Debug, Deserialize)]
 pub(super) struct LearnerModelParam {
     pub(super) base_score: String,
+    pub(super) num_class: String,
     pub(super) num_feature: String,
     pub(super) num_target: String,
 }

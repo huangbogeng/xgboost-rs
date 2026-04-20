@@ -14,17 +14,17 @@ pub(crate) fn load_model_json<P: AsRef<Path>>(path: P) -> Result<XgbModel> {
 }
 
 pub(super) fn build_model_from_json(model: JsonModel) -> Result<XgbModel> {
-    if model.learner.gradient_booster.name != "gbtree" {
+    let learner = model.learner;
+
+    if learner.gradient_booster.name != "gbtree" {
         return Err(XgbError::UnsupportedModel {
             context: "gradient booster",
-            value: model.learner.gradient_booster.name,
+            value: learner.gradient_booster.name,
         });
     }
 
-    let objective = parse_objective(&model.learner.objective.name)?;
-
     let num_target = parse_usize_field(
-        &model.learner.model_param.num_target,
+        &learner.model_param.num_target,
         "learner_model_param.num_target",
     )?;
     if num_target != 1 {
@@ -34,55 +34,87 @@ pub(super) fn build_model_from_json(model: JsonModel) -> Result<XgbModel> {
         });
     }
 
-    if model.learner.gradient_booster.model.tree_info.len()
-        != model.learner.gradient_booster.model.trees.len()
-    {
+    let num_class = parse_usize_field(
+        &learner.model_param.num_class,
+        "learner_model_param.num_class",
+    )?;
+    let objective = parse_objective(&learner.objective.name, num_class)?;
+
+    let booster_model = learner.gradient_booster.model;
+    let tree_info = booster_model.tree_info;
+    let json_trees = booster_model.trees;
+
+    if tree_info.len() != json_trees.len() {
         return Err(XgbError::InvalidModelFormat(
             "tree_info length does not match trees length",
         ));
     }
 
-    if model
-        .learner
-        .gradient_booster
-        .model
-        .tree_info
-        .iter()
-        .any(|group| *group != 0)
-    {
-        return Err(XgbError::UnsupportedModel {
-            context: "tree_info output groups",
-            value: format!("{:?}", model.learner.gradient_booster.model.tree_info),
-        });
-    }
+    validate_tree_info_groups(&tree_info, objective.output_groups())?;
 
-    let base_margin = parse_base_score(&model.learner.model_param.base_score, objective)?;
+    let base_margins = parse_base_score(&learner.model_param.base_score, objective)?;
     let n_features = parse_usize_field(
-        &model.learner.model_param.num_feature,
+        &learner.model_param.num_feature,
         "learner_model_param.num_feature",
     )?;
-    let trees = model
-        .learner
-        .gradient_booster
-        .model
-        .trees
+    let trees = json_trees
         .into_iter()
         .enumerate()
         .map(|(tree_idx, tree)| build_tree_from_json(tree_idx, tree, n_features))
         .collect::<Result<Vec<_>>>()?;
 
-    XgbModel::from_parts(objective, base_margin, n_features, trees)
+    XgbModel::from_parts(objective, base_margins, n_features, trees, tree_info)
 }
 
-fn parse_objective(raw: &str) -> Result<Objective> {
+fn parse_objective(raw: &str, num_class: usize) -> Result<Objective> {
     match raw {
-        "reg:squarederror" => Ok(Objective::Regression),
-        "binary:logistic" => Ok(Objective::BinaryLogistic),
+        "reg:squarederror" => {
+            if num_class > 1 {
+                return Err(XgbError::InvalidModelFormat(
+                    "reg:squarederror expects num_class to be 0 or 1",
+                ));
+            }
+            Ok(Objective::Regression)
+        }
+        "binary:logistic" => {
+            if num_class > 1 {
+                return Err(XgbError::InvalidModelFormat(
+                    "binary:logistic expects num_class to be 0 or 1",
+                ));
+            }
+            Ok(Objective::BinaryLogistic)
+        }
+        "multi:softprob" => {
+            if num_class < 2 {
+                return Err(XgbError::InvalidModelFormat(
+                    "multi:softprob requires num_class >= 2",
+                ));
+            }
+            Ok(Objective::MultiSoftprob { num_class })
+        }
+        "multi:softmax" => {
+            if num_class < 2 {
+                return Err(XgbError::InvalidModelFormat(
+                    "multi:softmax requires num_class >= 2",
+                ));
+            }
+            Ok(Objective::MultiSoftmax { num_class })
+        }
         _ => Err(XgbError::UnsupportedModel {
             context: "objective",
             value: raw.to_owned(),
         }),
     }
+}
+
+fn validate_tree_info_groups(tree_info: &[usize], output_groups: usize) -> Result<()> {
+    if tree_info.iter().any(|group| *group >= output_groups) {
+        return Err(XgbError::InvalidModelFormat(
+            "tree_info contains out-of-range output group index",
+        ));
+    }
+
+    Ok(())
 }
 
 fn build_tree_from_json(
@@ -174,27 +206,72 @@ fn build_node_from_json(
     })
 }
 
-fn parse_base_score(raw: &str, objective: Objective) -> Result<f64> {
+enum RawBaseScore {
+    Scalar(f64),
+    Vector(Vec<f64>),
+}
+
+fn parse_base_score(raw: &str, objective: Objective) -> Result<Vec<f64>> {
+    let raw_base_score = parse_raw_base_score(raw)?;
+
+    match objective {
+        Objective::Regression => {
+            let value = parse_scalar_base_score(raw_base_score)?;
+            Ok(vec![xgb_f32(value)])
+        }
+        Objective::BinaryLogistic => {
+            let value = parse_scalar_base_score(raw_base_score)?;
+            Ok(vec![logit(xgb_f32(value))?])
+        }
+        Objective::MultiSoftprob { num_class } | Objective::MultiSoftmax { num_class } => {
+            parse_multiclass_base_score(raw_base_score, num_class)
+        }
+    }
+}
+
+fn parse_raw_base_score(raw: &str) -> Result<RawBaseScore> {
     if let Ok(value) = raw.parse::<f64>() {
-        return parse_base_score_value(value, objective);
+        return Ok(RawBaseScore::Scalar(value));
     }
 
     if let Ok(values) = serde_json::from_str::<Vec<f64>>(raw) {
-        if values.len() == 1 {
-            return parse_base_score_value(values[0], objective);
-        }
+        return Ok(RawBaseScore::Vector(values));
     }
 
     Err(XgbError::InvalidModelFormat(
-        "base_score must be a scalar or a single-element vector",
+        "base_score must be a scalar or vector",
     ))
 }
 
-fn parse_base_score_value(value: f64, objective: Objective) -> Result<f64> {
-    let base_score = xgb_f32(value);
-    match objective {
-        Objective::Regression => Ok(base_score),
-        Objective::BinaryLogistic => logit(base_score),
+fn parse_scalar_base_score(raw_base_score: RawBaseScore) -> Result<f64> {
+    match raw_base_score {
+        RawBaseScore::Scalar(value) => Ok(value),
+        RawBaseScore::Vector(values) => {
+            if values.len() == 1 {
+                Ok(values[0])
+            } else {
+                Err(XgbError::InvalidModelFormat(
+                    "base_score must contain exactly one value for scalar objectives",
+                ))
+            }
+        }
+    }
+}
+
+fn parse_multiclass_base_score(raw_base_score: RawBaseScore, num_class: usize) -> Result<Vec<f64>> {
+    match raw_base_score {
+        RawBaseScore::Scalar(value) => Ok(vec![xgb_f32(value); num_class]),
+        RawBaseScore::Vector(values) => {
+            if values.len() != num_class {
+                return Err(XgbError::InvalidShape {
+                    context: "base_score",
+                    expected: num_class,
+                    actual: values.len(),
+                });
+            }
+
+            Ok(values.into_iter().map(xgb_f32).collect())
+        }
     }
 }
 
