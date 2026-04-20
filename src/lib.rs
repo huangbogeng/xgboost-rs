@@ -8,14 +8,14 @@
 //!
 //! - dense in-memory `f64` input
 //! - tree-ensemble prediction
-//! - official upstream `model.json` loading for a narrow regression subset
+//! - official upstream `model.json` loading for a narrow inference subset
 //! - explicit tree construction for tests and adapters
 //!
 //! Current official model support is intentionally narrow:
 //!
 //! - `booster=gbtree`
-//! - `objective=reg:squarederror`
-//! - single-target regression
+//! - `objective=reg:squarederror` or `objective=binary:logistic`
+//! - single-target prediction
 //! - numerical splits only
 //!
 //! # Example

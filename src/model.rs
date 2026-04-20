@@ -8,6 +8,12 @@ use crate::official_model;
 use crate::predict;
 use crate::tree::RegressionTree;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PredictionTask {
+    Regression,
+    BinaryLogistic,
+}
+
 /// Inference-only gradient-boosted tree model.
 ///
 /// This type is the stable public model surface. Callers can either load a
@@ -16,8 +22,9 @@ use crate::tree::RegressionTree;
 #[derive(Debug, Clone, PartialEq)]
 pub struct XGBModel {
     trees: Vec<RegressionTree>,
-    base_score: f64,
+    base_margin: f64,
     n_features: usize,
+    task: PredictionTask,
 }
 
 impl XGBModel {
@@ -28,7 +35,16 @@ impl XGBModel {
     /// Returns [`XGBError::InvalidParameter`] if `base_score` is not finite or
     /// if `n_features == 0`.
     pub fn new(base_score: f64, n_features: usize, trees: Vec<RegressionTree>) -> Result<Self> {
-        if !base_score.is_finite() {
+        Self::from_parts(PredictionTask::Regression, base_score, n_features, trees)
+    }
+
+    pub(crate) fn from_parts(
+        task: PredictionTask,
+        base_margin: f64,
+        n_features: usize,
+        trees: Vec<RegressionTree>,
+    ) -> Result<Self> {
+        if !base_margin.is_finite() {
             return Err(XGBError::InvalidParameter {
                 name: "base_score",
                 reason: "must be finite",
@@ -44,15 +60,19 @@ impl XGBModel {
 
         Ok(Self {
             trees,
-            base_score,
+            base_margin,
             n_features,
+            task,
         })
     }
 
-    /// Return the global bias added before tree contributions.
+    /// Return the serialized `XGBoost` `base_score` for supported objectives.
     #[must_use]
     pub fn base_score(&self) -> f64 {
-        self.base_score
+        match self.task {
+            PredictionTask::Regression => self.base_margin,
+            PredictionTask::BinaryLogistic => predict::sigmoid(self.base_margin),
+        }
     }
 
     /// Return the number of feature columns expected by this model.
@@ -67,14 +87,25 @@ impl XGBModel {
         &self.trees
     }
 
-    /// Predict regression values for a dense feature matrix.
+    /// Predict task outputs for a dense feature matrix.
+    ///
+    /// For supported official JSON models this returns:
+    ///
+    /// - regression values for `reg:squarederror`
+    /// - positive-class probabilities for `binary:logistic`
     ///
     /// # Errors
     ///
     /// Returns [`XGBError::FeatureCountMismatch`] if the feature count differs
     /// from the model expectation.
     pub fn predict_dense(&self, features: &DenseMatrix) -> Result<Vec<f64>> {
-        predict::predict_ensemble(self.base_score, &self.trees, features, self.n_features)
+        predict::predict_ensemble(
+            self.task,
+            self.base_margin,
+            &self.trees,
+            features,
+            self.n_features,
+        )
     }
 
     /// Load an official upstream `XGBoost` `model.json` file.
@@ -82,8 +113,8 @@ impl XGBModel {
     /// Currently supported model scope:
     ///
     /// - `booster=gbtree`
-    /// - `objective=reg:squarederror`
-    /// - single-target regression
+    /// - `objective=reg:squarederror` or `objective=binary:logistic`
+    /// - single-target prediction
     /// - numerical splits only
     ///
     /// # Errors
