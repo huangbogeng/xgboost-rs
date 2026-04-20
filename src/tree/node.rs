@@ -1,6 +1,6 @@
-//! Tree node types used by regression tree ensembles.
+//! Tree node types used by boosted tree ensembles.
 
-/// One node in a regression tree.
+/// One node in a decision tree.
 ///
 /// A node is either a leaf with `leaf_value`, or a split node with child
 /// indices and split metadata.
@@ -31,13 +31,13 @@ impl TreeNode {
     }
 }
 
-/// One trained regression tree.
+/// One trained decision tree in a boosted ensemble.
 #[derive(Debug, Clone, PartialEq)]
-pub struct RegressionTree {
+pub struct BoosterTree {
     pub nodes: Vec<TreeNode>,
 }
 
-impl RegressionTree {
+impl BoosterTree {
     /// Create a tree with a single root node.
     #[must_use]
     pub fn new(root: TreeNode) -> Self {
