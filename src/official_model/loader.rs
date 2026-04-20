@@ -1,77 +1,19 @@
-//! Loader for official upstream `XGBoost` JSON model files.
-
 use std::fs;
 use std::path::Path;
-
-use serde::Deserialize;
 
 use crate::error::{Result, XGBError};
 use crate::model::XGBModel;
 use crate::tree::{RegressionTree, TreeNode};
 
-#[derive(Debug, Deserialize)]
-struct JsonModel {
-    learner: Learner,
-}
+use super::schema::{JsonModel, JsonTree};
 
-#[derive(Debug, Deserialize)]
-struct Learner {
-    gradient_booster: GradientBooster,
-    #[serde(rename = "learner_model_param")]
-    model_param: LearnerModelParam,
-    objective: ObjectiveConfig,
-}
-
-#[derive(Debug, Deserialize)]
-struct GradientBooster {
-    name: String,
-    model: GbtreeModel,
-}
-
-#[derive(Debug, Deserialize)]
-struct GbtreeModel {
-    tree_info: Vec<usize>,
-    trees: Vec<JsonTree>,
-}
-
-#[derive(Debug, Deserialize)]
-struct LearnerModelParam {
-    base_score: String,
-    num_feature: String,
-    num_target: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ObjectiveConfig {
-    name: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct JsonTree {
-    base_weights: Vec<f64>,
-    default_left: Vec<u8>,
-    id: usize,
-    left_children: Vec<i32>,
-    right_children: Vec<i32>,
-    split_conditions: Vec<f64>,
-    split_indices: Vec<u32>,
-    split_type: Vec<u8>,
-    tree_param: TreeParam,
-}
-
-#[derive(Debug, Deserialize)]
-struct TreeParam {
-    num_nodes: String,
-    size_leaf_vector: String,
-}
-
-pub fn load_json_model<P: AsRef<Path>>(path: P) -> Result<XGBModel> {
+pub(crate) fn load_json_model<P: AsRef<Path>>(path: P) -> Result<XGBModel> {
     let contents = fs::read_to_string(path)?;
     let model: JsonModel = serde_json::from_str(&contents)?;
     convert_model(model)
 }
 
-fn convert_model(model: JsonModel) -> Result<XGBModel> {
+pub(super) fn convert_model(model: JsonModel) -> Result<XGBModel> {
     if model.learner.gradient_booster.name != "gbtree" {
         return Err(XGBError::UnsupportedModel {
             context: "gradient booster",
@@ -163,6 +105,7 @@ fn convert_tree(
     validate_tree_len(tree.base_weights.len(), num_nodes, "base_weights")?;
     validate_tree_len(tree.default_left.len(), num_nodes, "default_left")?;
     validate_tree_len(tree.split_type.len(), num_nodes, "split_type")?;
+    validate_tree_structure(&tree, num_nodes)?;
 
     let nodes = (0..num_nodes)
         .map(|node_idx| convert_node(&tree, node_idx, num_nodes, n_features))
@@ -255,6 +198,110 @@ fn validate_tree_len(actual: usize, expected: usize, context: &'static str) -> R
         });
     }
 
+    Ok(())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VisitState {
+    Unvisited,
+    Visiting,
+    Visited,
+}
+
+fn validate_tree_structure(tree: &JsonTree, num_nodes: usize) -> Result<()> {
+    if num_nodes == 0 {
+        return Err(XGBError::InvalidModelFormat(
+            "trees must contain at least one node",
+        ));
+    }
+
+    let mut visit_state = vec![VisitState::Unvisited; num_nodes];
+    let mut indegree = vec![0usize; num_nodes];
+    validate_reachable_subtree(tree, 0, num_nodes, &mut visit_state, &mut indegree)?;
+
+    if visit_state.contains(&VisitState::Unvisited) {
+        return Err(XGBError::InvalidModelFormat(
+            "tree contains unreachable nodes",
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_reachable_subtree(
+    tree: &JsonTree,
+    node_idx: usize,
+    num_nodes: usize,
+    visit_state: &mut [VisitState],
+    indegree: &mut [usize],
+) -> Result<()> {
+    match visit_state[node_idx] {
+        VisitState::Unvisited => {}
+        VisitState::Visiting => {
+            return Err(XGBError::InvalidModelFormat("tree contains a cycle"));
+        }
+        VisitState::Visited => {
+            return Ok(());
+        }
+    }
+
+    visit_state[node_idx] = VisitState::Visiting;
+
+    let default_left = tree.default_left[node_idx];
+    if default_left > 1 {
+        return Err(XGBError::InvalidModelFormat(
+            "default_left must be encoded as 0 or 1",
+        ));
+    }
+
+    let left = tree.left_children[node_idx];
+    let right = tree.right_children[node_idx];
+    match (left, right) {
+        (-1, -1) => {}
+        (-1, _) | (_, -1) => {
+            return Err(XGBError::InvalidModelFormat(
+                "split nodes must contain both children",
+            ));
+        }
+        (left, right) => {
+            let left_child = usize::try_from(left).map_err(|_| {
+                XGBError::InvalidModelFormat("left child index must be non-negative")
+            })?;
+            let right_child = usize::try_from(right).map_err(|_| {
+                XGBError::InvalidModelFormat("right child index must be non-negative")
+            })?;
+
+            if left_child >= num_nodes {
+                return Err(XGBError::InvalidModelFormat(
+                    "left child index out of bounds",
+                ));
+            }
+            if right_child >= num_nodes {
+                return Err(XGBError::InvalidModelFormat(
+                    "right child index out of bounds",
+                ));
+            }
+
+            indegree[left_child] += 1;
+            if indegree[left_child] > 1 {
+                return Err(XGBError::InvalidModelFormat(
+                    "tree nodes must have exactly one parent",
+                ));
+            }
+
+            indegree[right_child] += 1;
+            if indegree[right_child] > 1 {
+                return Err(XGBError::InvalidModelFormat(
+                    "tree nodes must have exactly one parent",
+                ));
+            }
+
+            validate_reachable_subtree(tree, left_child, num_nodes, visit_state, indegree)?;
+            validate_reachable_subtree(tree, right_child, num_nodes, visit_state, indegree)?;
+        }
+    }
+
+    visit_state[node_idx] = VisitState::Visited;
     Ok(())
 }
 

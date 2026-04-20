@@ -4,9 +4,9 @@ use std::path::Path;
 
 use crate::dataset::DenseMatrix;
 use crate::error::{Result, XGBError};
+use crate::official_model;
 use crate::predict;
 use crate::tree::RegressionTree;
-use crate::xgboost_json;
 
 /// Inference-only gradient-boosted tree model.
 ///
@@ -91,7 +91,7 @@ impl XGBModel {
     /// Returns an error if reading the file fails, if the JSON is malformed, or
     /// if the model uses unsupported upstream features.
     pub fn load_json<P: AsRef<Path>>(path: P) -> Result<Self> {
-        xgboost_json::load_json_model(path)
+        official_model::load_json_model(path)
     }
 }
 
