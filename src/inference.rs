@@ -1,9 +1,9 @@
 //! Prediction helpers for trained trees and ensembles.
 
 use crate::dataset::DenseMatrix;
-use crate::error::{Result, XGBError};
-use crate::model::PredictionTask;
-use crate::tree::RegressionTree;
+use crate::error::{Result, XgbError};
+use crate::model::Objective;
+use crate::tree::BoosterTree;
 
 /// Predict a batch of rows using a fitted tree ensemble.
 ///
@@ -12,17 +12,17 @@ use crate::tree::RegressionTree;
 ///
 /// # Errors
 ///
-/// Returns [`XGBError::FeatureCountMismatch`] if `features` does not match the
+/// Returns [`XgbError::FeatureCountMismatch`] if `features` does not match the
 /// expected number of feature columns.
-pub fn predict_ensemble(
-    task: PredictionTask,
+pub fn predict_dense(
+    objective: Objective,
     base_margin: f64,
-    trees: &[RegressionTree],
+    trees: &[BoosterTree],
     features: &DenseMatrix,
     expected_feature_count: usize,
 ) -> Result<Vec<f64>> {
     if features.n_cols() != expected_feature_count {
-        return Err(XGBError::FeatureCountMismatch {
+        return Err(XgbError::FeatureCountMismatch {
             expected: expected_feature_count,
             actual: features.n_cols(),
         });
@@ -31,19 +31,19 @@ pub fn predict_ensemble(
     let mut predictions = vec![base_margin; features.n_rows()];
     for (row_idx, prediction) in predictions.iter_mut().enumerate() {
         for tree in trees {
-            *prediction += predict_tree(tree, features, row_idx);
+            *prediction += predict_tree_row(tree, features, row_idx);
         }
 
-        *prediction = match task {
-            PredictionTask::Regression => *prediction,
-            PredictionTask::BinaryLogistic => sigmoid(*prediction),
+        *prediction = match objective {
+            Objective::Regression => *prediction,
+            Objective::BinaryLogistic => sigmoid(*prediction),
         };
     }
 
     Ok(predictions)
 }
 
-/// Predict one row using one trained regression tree.
+/// Predict one row using one trained decision tree.
 ///
 /// Missing values follow the node's `default_left` branch.
 ///
@@ -52,7 +52,7 @@ pub fn predict_ensemble(
 /// Panics if the tree contains an invalid split node that is missing required
 /// split metadata or child indices.
 #[must_use]
-pub fn predict_tree(tree: &RegressionTree, features: &DenseMatrix, row_idx: usize) -> f64 {
+pub fn predict_tree_row(tree: &BoosterTree, features: &DenseMatrix, row_idx: usize) -> f64 {
     let mut node_idx = 0;
 
     loop {

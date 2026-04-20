@@ -1,6 +1,6 @@
 //! Dense dataset types used for inference.
 
-use crate::error::{Result, XGBError};
+use crate::error::{Result, XgbError};
 
 /// Dense row-major feature matrix.
 ///
@@ -20,7 +20,7 @@ impl DenseMatrix {
     ///
     /// # Errors
     ///
-    /// Returns [`XGBError::InvalidShape`] if `data.len() != n_rows * n_cols`.
+    /// Returns [`XgbError::InvalidShape`] if `data.len() != n_rows * n_cols`.
     #[must_use = "constructors return a new matrix that must be used"]
     pub fn from_shape_vec(n_rows: usize, n_cols: usize, data: Vec<f64>) -> Result<Self> {
         Self::with_missing(n_rows, n_cols, data, None)
@@ -30,21 +30,21 @@ impl DenseMatrix {
     ///
     /// # Errors
     ///
-    /// Returns [`XGBError::InvalidShape`] if `data.len() != n_rows * n_cols`.
+    /// Returns [`XgbError::InvalidShape`] if `data.len() != n_rows * n_cols`.
     pub fn with_missing(
         n_rows: usize,
         n_cols: usize,
         data: Vec<f64>,
         missing: Option<f64>,
     ) -> Result<Self> {
-        let expected = n_rows.checked_mul(n_cols).ok_or(XGBError::InvalidShape {
+        let expected = n_rows.checked_mul(n_cols).ok_or(XgbError::InvalidShape {
             context: "dense matrix",
             expected: usize::MAX,
             actual: data.len(),
         })?;
 
         if expected != data.len() {
-            return Err(XGBError::InvalidShape {
+            return Err(XgbError::InvalidShape {
                 context: "dense matrix",
                 expected,
                 actual: data.len(),

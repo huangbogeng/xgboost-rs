@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use xgboost_rs::{DenseMatrix, XGBError, XGBModel};
+use xgboost_rs::{DenseMatrix, XgbError, XgbModel};
 
 fn fixture_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -18,7 +18,7 @@ fn assert_vec_close(actual: &[f64], expected: &[f64]) {
 
 #[test]
 fn loads_official_regressor_json_and_predicts() {
-    let model = XGBModel::load_json(fixture_path("regressor.json")).unwrap();
+    let model = XgbModel::load_json(fixture_path("regressor.json")).unwrap();
     let features = DenseMatrix::from_shape_vec(
         4,
         3,
@@ -41,7 +41,7 @@ fn loads_official_regressor_json_and_predicts() {
 
 #[test]
 fn loads_official_binary_classifier_json_and_predicts_probabilities() {
-    let model = XGBModel::load_json(fixture_path("classifier.json")).unwrap();
+    let model = XgbModel::load_json(fixture_path("classifier.json")).unwrap();
     let features = DenseMatrix::from_shape_vec(
         4,
         3,
@@ -64,21 +64,21 @@ fn loads_official_binary_classifier_json_and_predicts_probabilities() {
 
 #[test]
 fn binary_classifier_reports_probability_base_score() {
-    let model = XGBModel::load_json(fixture_path("classifier.json")).unwrap();
+    let model = XgbModel::load_json(fixture_path("classifier.json")).unwrap();
 
     assert!((model.base_score() - 0.52).abs() < 1.0e-6);
 }
 
 #[test]
-fn official_model_predict_checks_feature_count() {
-    let model = XGBModel::load_json(fixture_path("regressor.json")).unwrap();
+fn xgboost_json_predict_checks_feature_count() {
+    let model = XgbModel::load_json(fixture_path("regressor.json")).unwrap();
     let features = DenseMatrix::from_shape_vec(1, 2, vec![0.0, 0.0]).unwrap();
 
     let error = model.predict_dense(&features).unwrap_err();
 
     assert!(matches!(
         error,
-        XGBError::FeatureCountMismatch {
+        XgbError::FeatureCountMismatch {
             expected: 3,
             actual: 2
         }

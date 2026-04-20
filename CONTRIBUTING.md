@@ -32,6 +32,11 @@ cargo test --all-targets --all-features
 
 - Follow `rustfmt` formatting.
 - Treat clippy warnings as errors in CI.
+- Use Rust naming conventions consistently:
+  - modules/files/functions: `snake_case`
+  - types/traits/enums: `UpperCamelCase`
+  - acronymed type names follow Rust style (for example, `XgbModel`, not `XGBModel`)
+- Prefer domain-accurate names for modules and types; avoid implementation-specific or ambiguous names.
 
 ## Questions
 

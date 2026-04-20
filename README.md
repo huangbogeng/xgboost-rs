@@ -36,7 +36,7 @@ That makes `xgboost-rs` a good fit when you want a Rust-native inference path wi
 
 ## 📊 Prediction Output
 
-`XGBModel::predict_dense(...)` returns task outputs for the loaded model:
+`XgbModel::predict_dense(...)` returns task outputs for the loaded model:
 
 | Objective | Returned value |
 | :--- | :--- |
@@ -59,11 +59,11 @@ The crate does **not** currently support:
 ## 🚀 Example
 
 ```rust,no_run
-use xgboost_rs::{DenseMatrix, XGBModel};
+use xgboost_rs::{DenseMatrix, XgbModel};
 
-fn main() -> Result<(), xgboost_rs::XGBError> {
+fn main() -> Result<(), xgboost_rs::XgbError> {
     // 1. Load the model
-    let model = XGBModel::load_json("model.json")?;
+    let model = XgbModel::load_json("model.json")?;
 
     // 2. Prepare features
     let features = DenseMatrix::from_shape_vec(
@@ -83,9 +83,9 @@ fn main() -> Result<(), xgboost_rs::XGBError> {
 
 ## 🛠️ API Overview
 
-- **`XGBModel::load_json(...)`**: Loads a supported official `XGBoost` `model.json` file.
-- **`XGBModel::predict_dense(...)`**: Runs dense CPU inference and returns task outputs.
-- **`XGBModel::new(...)`**: Builds a regression model from already prepared tree structures. This is mainly useful for tests and adapters.
+- **`XgbModel::load_json(...)`**: Loads a supported official `XGBoost` `model.json` file.
+- **`XgbModel::predict_dense(...)`**: Runs dense CPU inference and returns task outputs.
+- **`XgbModel::new(...)`**: Builds a regression model from already prepared tree structures. This is mainly useful for tests and adapters.
 
 ## 💡 Design Principles
 

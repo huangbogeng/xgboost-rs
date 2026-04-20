@@ -2,11 +2,11 @@ use std::fmt::{Display, Formatter};
 use std::io;
 
 /// Crate-local result type.
-pub type Result<T> = std::result::Result<T, XGBError>;
+pub type Result<T> = std::result::Result<T, XgbError>;
 
 /// Error type for model loading and prediction.
 #[derive(Debug)]
-pub enum XGBError {
+pub enum XgbError {
     /// A shape-related invariant was violated.
     InvalidShape {
         context: &'static str,
@@ -33,7 +33,7 @@ pub enum XGBError {
     Serde(serde_json::Error),
 }
 
-impl Display for XGBError {
+impl Display for XgbError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidShape {
@@ -61,7 +61,7 @@ impl Display for XGBError {
     }
 }
 
-impl std::error::Error for XGBError {
+impl std::error::Error for XgbError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io(err) => Some(err),
@@ -71,13 +71,13 @@ impl std::error::Error for XGBError {
     }
 }
 
-impl From<io::Error> for XGBError {
+impl From<io::Error> for XgbError {
     fn from(value: io::Error) -> Self {
         Self::Io(value)
     }
 }
 
-impl From<serde_json::Error> for XGBError {
+impl From<serde_json::Error> for XgbError {
     fn from(value: serde_json::Error) -> Self {
         Self::Serde(value)
     }

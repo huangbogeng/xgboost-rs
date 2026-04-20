@@ -3,17 +3,17 @@
 mod loader;
 mod schema;
 
-pub(crate) use loader::load_json_model;
+pub(crate) use loader::load_model_json;
 
 #[cfg(test)]
 mod tests {
-    use super::loader::convert_model;
+    use super::loader::build_model_from_json;
     use super::schema::JsonModel;
-    use crate::error::{Result, XGBError};
+    use crate::error::{Result, XgbError};
 
-    fn load_model_from_json(json: &str) -> Result<crate::model::XGBModel> {
+    fn load_model_from_json(json: &str) -> Result<crate::model::XgbModel> {
         let model: JsonModel = serde_json::from_str(json)?;
-        convert_model(model)
+        build_model_from_json(model)
     }
 
     fn wrap_single_tree(tree_json: &str) -> String {
@@ -61,7 +61,7 @@ mod tests {
 
         let error = load_model_from_json(&json).unwrap_err();
 
-        assert!(matches!(error, XGBError::InvalidModelFormat(_)));
+        assert!(matches!(error, XgbError::InvalidModelFormat(_)));
     }
 
     #[test]
@@ -85,7 +85,7 @@ mod tests {
 
         let error = load_model_from_json(&json).unwrap_err();
 
-        assert!(matches!(error, XGBError::InvalidModelFormat(_)));
+        assert!(matches!(error, XgbError::InvalidModelFormat(_)));
     }
 
     #[test]
@@ -109,6 +109,6 @@ mod tests {
 
         let error = load_model_from_json(&json).unwrap_err();
 
-        assert!(matches!(error, XGBError::InvalidModelFormat(_)));
+        assert!(matches!(error, XgbError::InvalidModelFormat(_)));
     }
 }

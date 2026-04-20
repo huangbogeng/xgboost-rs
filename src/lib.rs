@@ -13,7 +13,7 @@
 //! - numerical splits only
 //! - dense in-memory `f64` features
 //!
-//! `XGBModel::predict_dense(...)` returns task outputs:
+//! `XgbModel::predict_dense(...)` returns task outputs:
 //!
 //! - regression predictions for `reg:squarederror`
 //! - positive-class probabilities for `binary:logistic`
@@ -21,11 +21,11 @@
 //! # Example
 //!
 //! ```rust,no_run
-//! use xgboost_rs::{DenseMatrix, RegressionTree, TreeNode, XGBModel};
+//! use xgboost_rs::{BoosterTree, DenseMatrix, TreeNode, XgbModel};
 //!
-//! # fn main() -> Result<(), xgboost_rs::XGBError> {
+//! # fn main() -> Result<(), xgboost_rs::XgbError> {
 //! let features = DenseMatrix::from_shape_vec(2, 1, vec![0.0, 2.0])?;
-//! let tree = RegressionTree {
+//! let tree = BoosterTree {
 //!     nodes: vec![
 //!         TreeNode {
 //!             split_feature: Some(0),
@@ -41,7 +41,7 @@
 //!     ],
 //! };
 //!
-//! let model = XGBModel::new(0.5, 1, vec![tree])?;
+//! let model = XgbModel::new(0.5, 1, vec![tree])?;
 //! let predictions = model.predict_dense(&features)?;
 //! assert_eq!(predictions, vec![0.0, 1.0]);
 //! # Ok(())
@@ -50,16 +50,16 @@
 
 mod dataset;
 mod error;
+mod inference;
 mod model;
-mod official_model;
-mod predict;
 mod tree;
+mod xgboost_json;
 
 /// Dense prediction input.
 pub use dataset::DenseMatrix;
 /// Common result and error types used across the crate.
-pub use error::{Result, XGBError};
+pub use error::{Result, XgbError};
 /// Inference-only model surface.
-pub use model::XGBModel;
+pub use model::XgbModel;
 /// Tree types reusable by adapters and tests.
-pub use tree::{RegressionTree, TreeNode};
+pub use tree::{BoosterTree, TreeNode};

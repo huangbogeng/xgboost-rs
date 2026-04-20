@@ -2,4 +2,4 @@
 
 mod node;
 
-pub use node::{RegressionTree, TreeNode};
+pub use node::{BoosterTree, TreeNode};
