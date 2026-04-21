@@ -5,7 +5,7 @@ use std::path::Path;
 use crate::dataset::DenseMatrix;
 use crate::error::{Result, XgbError};
 use crate::inference;
-use crate::tree::{BoosterTree, TreeNode};
+use crate::tree::{BoosterTree, TreeNode, validate_tree_topology};
 use crate::xgboost_json;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,74 +190,18 @@ impl XgbModel {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum VisitState {
-    Unvisited,
-    Visiting,
-    Visited,
-}
-
-#[derive(Clone, Copy)]
-enum TraversalStep {
-    Enter(usize),
-    Exit(usize),
-}
-
 fn validate_tree_structure(tree: &BoosterTree, n_features: usize) -> Result<()> {
-    if tree.nodes.is_empty() {
-        return Err(XgbError::InvalidModelFormat(
-            "trees must contain at least one node",
-        ));
-    }
+    validate_tree_topology(tree.nodes.len(), |node_idx| {
+        let node = &tree.nodes[node_idx];
 
-    let num_nodes = tree.nodes.len();
-    let mut visit_state = vec![VisitState::Unvisited; num_nodes];
-    let mut indegree = vec![0usize; num_nodes];
-    let mut stack = vec![TraversalStep::Enter(0)];
-
-    while let Some(step) = stack.pop() {
-        match step {
-            TraversalStep::Enter(node_idx) => {
-                match visit_state[node_idx] {
-                    VisitState::Unvisited => {}
-                    VisitState::Visiting => {
-                        return Err(XgbError::InvalidModelFormat("tree contains a cycle"));
-                    }
-                    VisitState::Visited => {
-                        continue;
-                    }
-                }
-
-                visit_state[node_idx] = VisitState::Visiting;
-                let node = &tree.nodes[node_idx];
-
-                if let Some(leaf_value) = node.leaf_value {
-                    validate_leaf_node(node, leaf_value)?;
-
-                    visit_state[node_idx] = VisitState::Visited;
-                    continue;
-                }
-
-                let (left_child, right_child) =
-                    validate_split_node(node, n_features, num_nodes, &mut indegree)?;
-
-                stack.push(TraversalStep::Exit(node_idx));
-                stack.push(TraversalStep::Enter(right_child));
-                stack.push(TraversalStep::Enter(left_child));
-            }
-            TraversalStep::Exit(node_idx) => {
-                visit_state[node_idx] = VisitState::Visited;
-            }
+        if let Some(leaf_value) = node.leaf_value {
+            validate_leaf_node(node, leaf_value)?;
+            return Ok(None);
         }
-    }
 
-    if visit_state.contains(&VisitState::Unvisited) {
-        return Err(XgbError::InvalidModelFormat(
-            "tree contains unreachable nodes",
-        ));
-    }
-
-    Ok(())
+        let children = validate_split_node(node, n_features)?;
+        Ok(Some(children))
+    })
 }
 
 fn validate_leaf_node(node: &TreeNode, leaf_value: f64) -> Result<()> {
@@ -279,12 +223,7 @@ fn validate_leaf_node(node: &TreeNode, leaf_value: f64) -> Result<()> {
     Ok(())
 }
 
-fn validate_split_node(
-    node: &TreeNode,
-    n_features: usize,
-    num_nodes: usize,
-    indegree: &mut [usize],
-) -> Result<(usize, usize)> {
+fn validate_split_node(node: &TreeNode, n_features: usize) -> Result<(usize, usize)> {
     let split_feature = node.split_feature.ok_or(XgbError::InvalidModelFormat(
         "split nodes must contain split_feature",
     ))?;
@@ -313,31 +252,6 @@ fn validate_split_node(
     let right_child = node.right_child.ok_or(XgbError::InvalidModelFormat(
         "split nodes must contain right_child",
     ))?;
-
-    if left_child >= num_nodes {
-        return Err(XgbError::InvalidModelFormat(
-            "left child index out of bounds",
-        ));
-    }
-    if right_child >= num_nodes {
-        return Err(XgbError::InvalidModelFormat(
-            "right child index out of bounds",
-        ));
-    }
-
-    indegree[left_child] += 1;
-    if indegree[left_child] > 1 {
-        return Err(XgbError::InvalidModelFormat(
-            "tree nodes must have exactly one parent",
-        ));
-    }
-
-    indegree[right_child] += 1;
-    if indegree[right_child] > 1 {
-        return Err(XgbError::InvalidModelFormat(
-            "tree nodes must have exactly one parent",
-        ));
-    }
 
     Ok((left_child, right_child))
 }

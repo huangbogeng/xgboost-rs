@@ -27,32 +27,10 @@ mod tests {
         num_target: usize,
         tree_info: &[usize],
     ) -> String {
-        wrap_single_tree_with_booster(
-            "gbtree",
-            tree_json,
-            objective,
-            base_score,
-            num_class,
-            num_feature,
-            num_target,
-            tree_info,
-        )
-    }
-
-    fn wrap_single_tree_with_booster(
-        booster_name: &str,
-        tree_json: &Value,
-        objective: &str,
-        base_score: &str,
-        num_class: usize,
-        num_feature: usize,
-        num_target: usize,
-        tree_info: &[usize],
-    ) -> String {
         json!({
             "learner": {
                 "gradient_booster": {
-                    "name": booster_name,
+                    "name": "gbtree",
                     "model": {
                         "tree_info": tree_info,
                         "trees": [tree_json],
@@ -190,8 +168,7 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_gradient_booster() {
-        let json = wrap_single_tree_with_booster(
-            "gblinear",
+        let mut model: Value = serde_json::from_str(&wrap_single_tree(
             &leaf_tree(0.0),
             "reg:squarederror",
             "0.5",
@@ -199,7 +176,10 @@ mod tests {
             1,
             1,
             &[0],
-        );
+        ))
+        .unwrap();
+        model["learner"]["gradient_booster"]["name"] = json!("gblinear");
+        let json = model.to_string();
 
         let error = load_model_from_json(&json).unwrap_err();
 
