@@ -45,7 +45,7 @@ pub(super) fn build_model_from_json(model: JsonModel) -> Result<XgbModel> {
     let json_trees = booster_model.trees;
 
     if tree_info.len() != json_trees.len() {
-        return Err(XgbError::InvalidModelFormat(
+        return Err(XgbError::invalid_model_format(
             "tree_info length does not match trees length",
         ));
     }
@@ -60,7 +60,10 @@ pub(super) fn build_model_from_json(model: JsonModel) -> Result<XgbModel> {
     let trees = json_trees
         .into_iter()
         .enumerate()
-        .map(|(tree_idx, tree)| build_tree_from_json(tree_idx, tree, n_features))
+        .map(|(tree_idx, tree)| {
+            build_tree_from_json(tree_idx, tree, n_features)
+                .map_err(|error| error.with_model_context(format!("tree {tree_idx}")))
+        })
         .collect::<Result<Vec<_>>>()?;
 
     XgbModel::from_parts(objective, base_margins, n_features, trees, tree_info)
@@ -70,7 +73,7 @@ fn parse_objective(raw: &str, num_class: usize) -> Result<Objective> {
     match raw {
         "reg:squarederror" => {
             if num_class > 1 {
-                return Err(XgbError::InvalidModelFormat(
+                return Err(XgbError::invalid_model_format(
                     "reg:squarederror expects num_class to be 0 or 1",
                 ));
             }
@@ -78,7 +81,7 @@ fn parse_objective(raw: &str, num_class: usize) -> Result<Objective> {
         }
         "binary:logistic" => {
             if num_class > 1 {
-                return Err(XgbError::InvalidModelFormat(
+                return Err(XgbError::invalid_model_format(
                     "binary:logistic expects num_class to be 0 or 1",
                 ));
             }
@@ -86,7 +89,7 @@ fn parse_objective(raw: &str, num_class: usize) -> Result<Objective> {
         }
         "multi:softprob" => {
             if num_class < 2 {
-                return Err(XgbError::InvalidModelFormat(
+                return Err(XgbError::invalid_model_format(
                     "multi:softprob requires num_class >= 2",
                 ));
             }
@@ -94,7 +97,7 @@ fn parse_objective(raw: &str, num_class: usize) -> Result<Objective> {
         }
         "multi:softmax" => {
             if num_class < 2 {
-                return Err(XgbError::InvalidModelFormat(
+                return Err(XgbError::invalid_model_format(
                     "multi:softmax requires num_class >= 2",
                 ));
             }
@@ -109,7 +112,7 @@ fn parse_objective(raw: &str, num_class: usize) -> Result<Objective> {
 
 fn validate_tree_info_groups(tree_info: &[usize], output_groups: usize) -> Result<()> {
     if tree_info.iter().any(|group| *group >= output_groups) {
-        return Err(XgbError::InvalidModelFormat(
+        return Err(XgbError::invalid_model_format(
             "tree_info contains out-of-range output group index",
         ));
     }
@@ -123,7 +126,7 @@ fn build_tree_from_json(
     n_features: usize,
 ) -> Result<BoosterTree> {
     if tree.id != expected_tree_id {
-        return Err(XgbError::InvalidModelFormat(
+        return Err(XgbError::invalid_model_format(
             "tree id does not match tree position",
         ));
     }
@@ -146,24 +149,24 @@ fn build_tree_from_json(
     validate_tree_topology(num_nodes, |node_idx| {
         let default_left = tree.default_left[node_idx];
         if default_left > 1 {
-            return Err(XgbError::InvalidModelFormat(
-                "default_left must be encoded as 0 or 1",
-            ));
+            return Err(XgbError::invalid_model_format(format!(
+                "default_left must be encoded as 0 or 1 at node {node_idx}",
+            )));
         }
 
         let left = tree.left_children[node_idx];
         let right = tree.right_children[node_idx];
         match (left, right) {
             (-1, -1) => Ok(None),
-            (-1, _) | (_, -1) => Err(XgbError::InvalidModelFormat(
+            (-1, _) | (_, -1) => Err(XgbError::invalid_model_format(
                 "split nodes must contain both children",
             )),
             (left, right) => {
                 let left_child = usize::try_from(left).map_err(|_| {
-                    XgbError::InvalidModelFormat("left child index must be non-negative")
+                    XgbError::invalid_model_format("left child index must be non-negative")
                 })?;
                 let right_child = usize::try_from(right).map_err(|_| {
-                    XgbError::InvalidModelFormat("right child index must be non-negative")
+                    XgbError::invalid_model_format("right child index must be non-negative")
                 })?;
                 Ok(Some((left_child, right_child)))
             }
@@ -171,7 +174,10 @@ fn build_tree_from_json(
     })?;
 
     let nodes = (0..num_nodes)
-        .map(|node_idx| build_node_from_json(&tree, node_idx, num_nodes, n_features))
+        .map(|node_idx| {
+            build_node_from_json(&tree, node_idx, num_nodes, n_features)
+                .map_err(|error| error.with_model_context(format!("node {node_idx}")))
+        })
         .collect::<Result<Vec<_>>>()?;
 
     Ok(BoosterTree { nodes })
@@ -199,25 +205,25 @@ fn build_node_from_json(
 
     let split_feature = tree.split_indices[node_idx] as usize;
     if split_feature >= n_features {
-        return Err(XgbError::InvalidModelFormat(
-            "split feature index out of bounds",
-        ));
+        return Err(XgbError::invalid_model_format(format!(
+            "split feature index out of bounds: split_feature={split_feature}, feature_count={n_features}",
+        )));
     }
 
     let left_child = usize::try_from(left)
-        .map_err(|_| XgbError::InvalidModelFormat("left child index must be non-negative"))?;
+        .map_err(|_| XgbError::invalid_model_format("left child index must be non-negative"))?;
     let right_child = usize::try_from(right)
-        .map_err(|_| XgbError::InvalidModelFormat("right child index must be non-negative"))?;
+        .map_err(|_| XgbError::invalid_model_format("right child index must be non-negative"))?;
 
     if left_child >= num_nodes {
-        return Err(XgbError::InvalidModelFormat(
-            "left child index out of bounds",
-        ));
+        return Err(XgbError::invalid_model_format(format!(
+            "left child index out of bounds: left_child={left_child}, node_count={num_nodes}",
+        )));
     }
     if right_child >= num_nodes {
-        return Err(XgbError::InvalidModelFormat(
-            "right child index out of bounds",
-        ));
+        return Err(XgbError::invalid_model_format(format!(
+            "right child index out of bounds: right_child={right_child}, node_count={num_nodes}",
+        )));
     }
 
     Ok(TreeNode {
@@ -263,7 +269,7 @@ fn parse_raw_base_score(raw: &str) -> Result<RawBaseScore> {
         return Ok(RawBaseScore::Vector(values));
     }
 
-    Err(XgbError::InvalidModelFormat(
+    Err(XgbError::invalid_model_format(
         "base_score must be a scalar or vector",
     ))
 }
@@ -275,7 +281,7 @@ fn parse_scalar_base_score(raw_base_score: RawBaseScore) -> Result<f64> {
             if values.len() == 1 {
                 Ok(values[0])
             } else {
-                Err(XgbError::InvalidModelFormat(
+                Err(XgbError::invalid_model_format(
                     "base_score must contain exactly one value for scalar objectives",
                 ))
             }
@@ -302,7 +308,7 @@ fn parse_multiclass_base_score(raw_base_score: RawBaseScore, num_class: usize) -
 
 fn parse_usize_field(raw: &str, context: &'static str) -> Result<usize> {
     raw.parse::<usize>()
-        .map_err(|_| XgbError::InvalidModelFormat(context))
+        .map_err(|_| XgbError::invalid_model_format(context))
 }
 
 fn validate_array_len(actual: usize, expected: usize, context: &'static str) -> Result<()> {
@@ -327,7 +333,7 @@ fn xgb_f32(value: f64) -> f64 {
 
 fn logit(probability: f64) -> Result<f64> {
     if !(0.0 < probability && probability < 1.0) {
-        return Err(XgbError::InvalidModelFormat(
+        return Err(XgbError::invalid_model_format(
             "binary:logistic base_score must be strictly between 0 and 1",
         ));
     }

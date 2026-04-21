@@ -10,10 +10,13 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 - `XgbModel::new` now validates input tree structures up front and returns explicit errors for invalid nodes, cycles, unreachable nodes, and non-finite split/leaf values.
 - Prediction traversal now returns structured errors for malformed trees instead of panicking at runtime.
+- Malformed-model errors now include richer context (for example tree/node/row indices) to improve debugging.
+- Prediction paths now validate internal shape invariants defensively to avoid panic on inconsistent internal state.
 
 ### Added
 
 - Additional malformed-model tests covering constructor validation and panic-free tree traversal.
+- Panic-free indexing APIs on `DenseMatrix`: `try_row` and `try_value`.
 
 ## [0.2.0] - 2026-04-21
 

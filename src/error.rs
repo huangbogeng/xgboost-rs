@@ -21,7 +21,7 @@ pub enum XgbError {
     /// The feature count used for prediction does not match the fitted model.
     FeatureCountMismatch { expected: usize, actual: usize },
     /// The model file is structurally invalid for the expected schema.
-    InvalidModelFormat(&'static str),
+    InvalidModelFormat(String),
     /// The model uses a valid upstream feature that this crate does not support yet.
     UnsupportedModel {
         context: &'static str,
@@ -31,6 +31,21 @@ pub enum XgbError {
     Io(io::Error),
     /// Model serialization or deserialization failed.
     Serde(serde_json::Error),
+}
+
+impl XgbError {
+    pub(crate) fn invalid_model_format(context: impl Into<String>) -> Self {
+        Self::InvalidModelFormat(context.into())
+    }
+
+    pub(crate) fn with_model_context(self, context: impl AsRef<str>) -> Self {
+        match self {
+            Self::InvalidModelFormat(message) => {
+                Self::InvalidModelFormat(format!("{}: {message}", context.as_ref()))
+            }
+            other => other,
+        }
+    }
 }
 
 impl Display for XgbError {
