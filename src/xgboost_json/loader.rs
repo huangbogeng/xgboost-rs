@@ -412,7 +412,7 @@ fn xgb_f32(value: f64) -> f64 {
 }
 
 fn logit(probability: f64) -> Result<f64> {
-    if !(0.0..1.0).contains(&probability) {
+    if !(0.0 < probability && probability < 1.0) {
         return Err(XgbError::InvalidModelFormat(
             "binary:logistic base_score must be strictly between 0 and 1",
         ));
