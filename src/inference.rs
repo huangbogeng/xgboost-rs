@@ -40,7 +40,7 @@ pub fn predict_dense(
                 tree_info,
                 trees,
                 features,
-            );
+            )?;
             for row_margins in margins.chunks_exact_mut(num_class) {
                 softmax_in_place(row_margins);
             }
@@ -53,7 +53,7 @@ pub fn predict_dense(
                 tree_info,
                 trees,
                 features,
-            );
+            )?;
             Ok(margins
                 .chunks_exact(num_class)
                 .map(best_class_index)
@@ -72,7 +72,7 @@ fn predict_dense_scalar(
     let mut predictions = vec![base_margin; features.n_rows()];
     for (row_idx, prediction) in predictions.iter_mut().enumerate() {
         for tree in trees {
-            *prediction += predict_tree_row(tree, features, row_idx);
+            *prediction += predict_tree_row(tree, features, row_idx)?;
         }
 
         *prediction = match objective {
@@ -95,7 +95,7 @@ fn predict_dense_multiclass_margins(
     tree_info: &[usize],
     trees: &[BoosterTree],
     features: &DenseMatrix,
-) -> Vec<f64> {
+) -> Result<Vec<f64>> {
     let n_rows = features.n_rows();
     let mut margins = vec![0.0; n_rows * num_class];
 
@@ -109,11 +109,11 @@ fn predict_dense_multiclass_margins(
         let output_group = tree_info[tree_idx];
         for row_idx in 0..n_rows {
             let margin_idx = row_idx * num_class + output_group;
-            margins[margin_idx] += predict_tree_row(tree, features, row_idx);
+            margins[margin_idx] += predict_tree_row(tree, features, row_idx)?;
         }
     }
 
-    margins
+    Ok(margins)
 }
 
 fn softmax_in_place(values: &mut [f64]) {
@@ -153,26 +153,64 @@ fn class_index_to_f64(index: usize) -> f64 {
 ///
 /// Missing values follow the node's `default_left` branch.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if the tree contains an invalid split node that is missing required
-/// split metadata or child indices.
-#[must_use]
-pub fn predict_tree_row(tree: &BoosterTree, features: &DenseMatrix, row_idx: usize) -> f64 {
+/// Returns [`XgbError::InvalidShape`] when `row_idx` is out of bounds.
+/// Returns [`XgbError::InvalidModelFormat`] when the tree contains invalid
+/// structure or split metadata.
+pub fn predict_tree_row(tree: &BoosterTree, features: &DenseMatrix, row_idx: usize) -> Result<f64> {
+    if row_idx >= features.n_rows() {
+        return Err(XgbError::InvalidShape {
+            context: "row index",
+            expected: features.n_rows(),
+            actual: row_idx,
+        });
+    }
+
+    if tree.nodes.is_empty() {
+        return Err(XgbError::InvalidModelFormat(
+            "trees must contain at least one node",
+        ));
+    }
+
     let mut node_idx = 0;
+    let mut steps = 0;
 
     loop {
-        let node = &tree.nodes[node_idx];
+        let node = tree
+            .nodes
+            .get(node_idx)
+            .ok_or(XgbError::InvalidModelFormat(
+                "tree node index out of bounds",
+            ))?;
+
         if let Some(value) = node.leaf_value {
-            return value;
+            return Ok(value);
         }
 
-        let split_feature = node
-            .split_feature
-            .expect("split nodes must contain split_feature");
-        let split_value = node
-            .split_value
-            .expect("split nodes must contain split_value");
+        if steps >= tree.nodes.len() {
+            return Err(XgbError::InvalidModelFormat(
+                "tree traversal exceeded node count",
+            ));
+        }
+        steps += 1;
+
+        let split_feature = node.split_feature.ok_or(XgbError::InvalidModelFormat(
+            "split nodes must contain split_feature",
+        ))?;
+        if split_feature >= features.n_cols() {
+            return Err(XgbError::InvalidModelFormat(
+                "split feature index out of bounds",
+            ));
+        }
+
+        let split_value = node.split_value.ok_or(XgbError::InvalidModelFormat(
+            "split nodes must contain split_value",
+        ))?;
+        if !split_value.is_finite() {
+            return Err(XgbError::InvalidModelFormat("split value must be finite"));
+        }
+
         let feature_value = features.value(row_idx, split_feature);
         let goes_left = if features.is_missing_value(feature_value) {
             node.default_left
@@ -180,11 +218,13 @@ pub fn predict_tree_row(tree: &BoosterTree, features: &DenseMatrix, row_idx: usi
             xgb_less_than(feature_value, split_value)
         };
         let next_idx = if goes_left {
-            node.left_child
-                .expect("split nodes must contain left_child")
+            node.left_child.ok_or(XgbError::InvalidModelFormat(
+                "split nodes must contain left_child",
+            ))?
         } else {
-            node.right_child
-                .expect("split nodes must contain right_child")
+            node.right_child.ok_or(XgbError::InvalidModelFormat(
+                "split nodes must contain right_child",
+            ))?
         };
         node_idx = next_idx;
     }
@@ -206,5 +246,57 @@ pub(crate) fn sigmoid(value: f64) -> f64 {
     } else {
         let exp_pos = value.exp();
         exp_pos / (1.0 + exp_pos)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::predict_tree_row;
+    use crate::dataset::DenseMatrix;
+    use crate::error::XgbError;
+    use crate::tree::{BoosterTree, TreeNode};
+
+    #[test]
+    fn predict_tree_row_rejects_missing_split_metadata() {
+        let tree = BoosterTree {
+            nodes: vec![
+                TreeNode {
+                    split_feature: None,
+                    split_bin: None,
+                    split_value: Some(1.0),
+                    left_child: Some(1),
+                    right_child: Some(2),
+                    leaf_value: None,
+                    default_left: true,
+                },
+                TreeNode::leaf(-1.0),
+                TreeNode::leaf(1.0),
+            ],
+        };
+        let features = DenseMatrix::from_shape_vec(1, 1, vec![0.0]).unwrap();
+
+        let error = predict_tree_row(&tree, &features, 0).unwrap_err();
+
+        assert!(matches!(error, XgbError::InvalidModelFormat(_)));
+    }
+
+    #[test]
+    fn predict_tree_row_rejects_cyclic_tree() {
+        let tree = BoosterTree {
+            nodes: vec![TreeNode {
+                split_feature: Some(0),
+                split_bin: None,
+                split_value: Some(1.0),
+                left_child: Some(0),
+                right_child: Some(0),
+                leaf_value: None,
+                default_left: true,
+            }],
+        };
+        let features = DenseMatrix::from_shape_vec(1, 1, vec![0.0]).unwrap();
+
+        let error = predict_tree_row(&tree, &features, 0).unwrap_err();
+
+        assert!(matches!(error, XgbError::InvalidModelFormat(_)));
     }
 }

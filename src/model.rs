@@ -5,7 +5,7 @@ use std::path::Path;
 use crate::dataset::DenseMatrix;
 use crate::error::{Result, XgbError};
 use crate::inference;
-use crate::tree::BoosterTree;
+use crate::tree::{BoosterTree, TreeNode};
 use crate::xgboost_json;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,6 +102,10 @@ impl XgbModel {
             });
         }
 
+        for tree in &trees {
+            validate_tree_structure(tree, n_features)?;
+        }
+
         Ok(Self {
             trees,
             tree_info,
@@ -186,6 +190,158 @@ impl XgbModel {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VisitState {
+    Unvisited,
+    Visiting,
+    Visited,
+}
+
+#[derive(Clone, Copy)]
+enum TraversalStep {
+    Enter(usize),
+    Exit(usize),
+}
+
+fn validate_tree_structure(tree: &BoosterTree, n_features: usize) -> Result<()> {
+    if tree.nodes.is_empty() {
+        return Err(XgbError::InvalidModelFormat(
+            "trees must contain at least one node",
+        ));
+    }
+
+    let num_nodes = tree.nodes.len();
+    let mut visit_state = vec![VisitState::Unvisited; num_nodes];
+    let mut indegree = vec![0usize; num_nodes];
+    let mut stack = vec![TraversalStep::Enter(0)];
+
+    while let Some(step) = stack.pop() {
+        match step {
+            TraversalStep::Enter(node_idx) => {
+                match visit_state[node_idx] {
+                    VisitState::Unvisited => {}
+                    VisitState::Visiting => {
+                        return Err(XgbError::InvalidModelFormat("tree contains a cycle"));
+                    }
+                    VisitState::Visited => {
+                        continue;
+                    }
+                }
+
+                visit_state[node_idx] = VisitState::Visiting;
+                let node = &tree.nodes[node_idx];
+
+                if let Some(leaf_value) = node.leaf_value {
+                    validate_leaf_node(node, leaf_value)?;
+
+                    visit_state[node_idx] = VisitState::Visited;
+                    continue;
+                }
+
+                let (left_child, right_child) =
+                    validate_split_node(node, n_features, num_nodes, &mut indegree)?;
+
+                stack.push(TraversalStep::Exit(node_idx));
+                stack.push(TraversalStep::Enter(right_child));
+                stack.push(TraversalStep::Enter(left_child));
+            }
+            TraversalStep::Exit(node_idx) => {
+                visit_state[node_idx] = VisitState::Visited;
+            }
+        }
+    }
+
+    if visit_state.contains(&VisitState::Unvisited) {
+        return Err(XgbError::InvalidModelFormat(
+            "tree contains unreachable nodes",
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_leaf_node(node: &TreeNode, leaf_value: f64) -> Result<()> {
+    if !leaf_value.is_finite() {
+        return Err(XgbError::InvalidModelFormat("leaf value must be finite"));
+    }
+
+    if node.split_feature.is_some()
+        || node.split_bin.is_some()
+        || node.split_value.is_some()
+        || node.left_child.is_some()
+        || node.right_child.is_some()
+    {
+        return Err(XgbError::InvalidModelFormat(
+            "leaf nodes must not contain split metadata",
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_split_node(
+    node: &TreeNode,
+    n_features: usize,
+    num_nodes: usize,
+    indegree: &mut [usize],
+) -> Result<(usize, usize)> {
+    let split_feature = node.split_feature.ok_or(XgbError::InvalidModelFormat(
+        "split nodes must contain split_feature",
+    ))?;
+    if split_feature >= n_features {
+        return Err(XgbError::InvalidModelFormat(
+            "split feature index out of bounds",
+        ));
+    }
+
+    if node.split_bin.is_some() {
+        return Err(XgbError::InvalidModelFormat(
+            "split_bin is unsupported for inference",
+        ));
+    }
+
+    let split_value = node.split_value.ok_or(XgbError::InvalidModelFormat(
+        "split nodes must contain split_value",
+    ))?;
+    if !split_value.is_finite() {
+        return Err(XgbError::InvalidModelFormat("split value must be finite"));
+    }
+
+    let left_child = node.left_child.ok_or(XgbError::InvalidModelFormat(
+        "split nodes must contain left_child",
+    ))?;
+    let right_child = node.right_child.ok_or(XgbError::InvalidModelFormat(
+        "split nodes must contain right_child",
+    ))?;
+
+    if left_child >= num_nodes {
+        return Err(XgbError::InvalidModelFormat(
+            "left child index out of bounds",
+        ));
+    }
+    if right_child >= num_nodes {
+        return Err(XgbError::InvalidModelFormat(
+            "right child index out of bounds",
+        ));
+    }
+
+    indegree[left_child] += 1;
+    if indegree[left_child] > 1 {
+        return Err(XgbError::InvalidModelFormat(
+            "tree nodes must have exactly one parent",
+        ));
+    }
+
+    indegree[right_child] += 1;
+    if indegree[right_child] > 1 {
+        return Err(XgbError::InvalidModelFormat(
+            "tree nodes must have exactly one parent",
+        ));
+    }
+
+    Ok((left_child, right_child))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,5 +361,168 @@ mod tests {
         let predictions = model.predict_dense(&features).unwrap();
 
         assert_vec_close(&predictions, &[0.75, 0.75]);
+    }
+
+    #[test]
+    fn rejects_split_nodes_without_required_metadata() {
+        let tree = BoosterTree {
+            nodes: vec![
+                TreeNode {
+                    split_feature: None,
+                    split_bin: None,
+                    split_value: Some(1.0),
+                    left_child: Some(1),
+                    right_child: Some(2),
+                    leaf_value: None,
+                    default_left: true,
+                },
+                TreeNode::leaf(-1.0),
+                TreeNode::leaf(1.0),
+            ],
+        };
+
+        let error = XgbModel::new(0.0, 1, vec![tree]).unwrap_err();
+
+        assert!(matches!(error, XgbError::InvalidModelFormat(_)));
+    }
+
+    #[test]
+    fn rejects_split_feature_index_out_of_bounds() {
+        let tree = BoosterTree {
+            nodes: vec![
+                TreeNode {
+                    split_feature: Some(1),
+                    split_bin: None,
+                    split_value: Some(1.0),
+                    left_child: Some(1),
+                    right_child: Some(2),
+                    leaf_value: None,
+                    default_left: true,
+                },
+                TreeNode::leaf(-1.0),
+                TreeNode::leaf(1.0),
+            ],
+        };
+
+        let error = XgbModel::new(0.0, 1, vec![tree]).unwrap_err();
+
+        assert!(matches!(error, XgbError::InvalidModelFormat(_)));
+    }
+
+    #[test]
+    fn rejects_tree_cycles() {
+        let tree = BoosterTree {
+            nodes: vec![
+                TreeNode {
+                    split_feature: Some(0),
+                    split_bin: None,
+                    split_value: Some(1.0),
+                    left_child: Some(1),
+                    right_child: Some(2),
+                    leaf_value: None,
+                    default_left: true,
+                },
+                TreeNode {
+                    split_feature: Some(0),
+                    split_bin: None,
+                    split_value: Some(2.0),
+                    left_child: Some(0),
+                    right_child: Some(3),
+                    leaf_value: None,
+                    default_left: true,
+                },
+                TreeNode::leaf(-1.0),
+                TreeNode::leaf(1.0),
+            ],
+        };
+
+        let error = XgbModel::new(0.0, 1, vec![tree]).unwrap_err();
+
+        assert!(matches!(error, XgbError::InvalidModelFormat(_)));
+    }
+
+    #[test]
+    fn rejects_unreachable_nodes() {
+        let tree = BoosterTree {
+            nodes: vec![
+                TreeNode {
+                    split_feature: Some(0),
+                    split_bin: None,
+                    split_value: Some(1.0),
+                    left_child: Some(1),
+                    right_child: Some(2),
+                    leaf_value: None,
+                    default_left: true,
+                },
+                TreeNode::leaf(-1.0),
+                TreeNode::leaf(1.0),
+                TreeNode::leaf(3.0),
+            ],
+        };
+
+        let error = XgbModel::new(0.0, 1, vec![tree]).unwrap_err();
+
+        assert!(matches!(error, XgbError::InvalidModelFormat(_)));
+    }
+
+    #[test]
+    fn rejects_leaf_nodes_with_split_metadata() {
+        let tree = BoosterTree {
+            nodes: vec![TreeNode {
+                split_feature: Some(0),
+                split_bin: None,
+                split_value: Some(1.0),
+                left_child: Some(0),
+                right_child: Some(0),
+                leaf_value: Some(1.0),
+                default_left: true,
+            }],
+        };
+
+        let error = XgbModel::new(0.0, 1, vec![tree]).unwrap_err();
+
+        assert!(matches!(error, XgbError::InvalidModelFormat(_)));
+    }
+
+    #[test]
+    fn rejects_non_finite_leaf_value() {
+        let tree = BoosterTree {
+            nodes: vec![TreeNode {
+                split_feature: None,
+                split_bin: None,
+                split_value: None,
+                left_child: None,
+                right_child: None,
+                leaf_value: Some(f64::NAN),
+                default_left: true,
+            }],
+        };
+
+        let error = XgbModel::new(0.0, 1, vec![tree]).unwrap_err();
+
+        assert!(matches!(error, XgbError::InvalidModelFormat(_)));
+    }
+
+    #[test]
+    fn rejects_non_finite_split_value() {
+        let tree = BoosterTree {
+            nodes: vec![
+                TreeNode {
+                    split_feature: Some(0),
+                    split_bin: None,
+                    split_value: Some(f64::INFINITY),
+                    left_child: Some(1),
+                    right_child: Some(2),
+                    leaf_value: None,
+                    default_left: true,
+                },
+                TreeNode::leaf(-1.0),
+                TreeNode::leaf(1.0),
+            ],
+        };
+
+        let error = XgbModel::new(0.0, 1, vec![tree]).unwrap_err();
+
+        assert!(matches!(error, XgbError::InvalidModelFormat(_)));
     }
 }
