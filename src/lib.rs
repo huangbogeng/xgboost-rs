@@ -51,6 +51,24 @@
 //! # }
 //! ```
 
+#[cfg(not(any(
+    feature = "infer-serial",
+    feature = "infer-row-parallel",
+    feature = "infer-tree-parallel"
+)))]
+compile_error!(
+    "xgboost-rs requires exactly one inference backend feature: infer-serial, infer-row-parallel, or infer-tree-parallel"
+);
+
+#[cfg(any(
+    all(feature = "infer-serial", feature = "infer-row-parallel"),
+    all(feature = "infer-serial", feature = "infer-tree-parallel"),
+    all(feature = "infer-row-parallel", feature = "infer-tree-parallel")
+))]
+compile_error!(
+    "xgboost-rs inference backend features are mutually exclusive; enable exactly one of infer-serial, infer-row-parallel, or infer-tree-parallel"
+);
+
 mod dataset;
 mod error;
 mod inference;

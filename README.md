@@ -102,12 +102,32 @@ The project is focused on strengthening the supported path through:
 - Better loader validation
 - Continued alignment with official model semantics
 
+## 🚦 Inference Backend Features
+
+Compile-time inference backend selection is controlled by mutually exclusive Cargo features:
+
+- `infer-serial` (default): deterministic single-threaded backend
+- `infer-row-parallel`: row-level parallel backend (micro-batch friendly)
+- `infer-tree-parallel`: tree-level parallel backend with deterministic reduction order
+
+Build examples:
+
+```bash
+cargo build --no-default-features --features infer-serial
+cargo build --no-default-features --features infer-row-parallel
+cargo build --no-default-features --features infer-tree-parallel
+```
+
 ## ⚙️ Development
 
 ```bash
 cargo fmt --all
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets --all-features
+cargo clippy --all-targets --no-default-features --features infer-serial -- -D warnings
+cargo clippy --all-targets --no-default-features --features infer-row-parallel -- -D warnings
+cargo clippy --all-targets --no-default-features --features infer-tree-parallel -- -D warnings
+cargo test --all-targets --no-default-features --features infer-serial
+cargo test --all-targets --no-default-features --features infer-row-parallel
+cargo test --all-targets --no-default-features --features infer-tree-parallel
 ```
 
 ## 🤝 Contributing

@@ -1,9 +1,18 @@
 //! Prediction helpers for trained trees and ensembles.
 
+#[cfg(any(feature = "infer-row-parallel", feature = "infer-tree-parallel"))]
+use rayon::prelude::*;
+
 use crate::dataset::DenseMatrix;
 use crate::error::{Result, XgbError};
 use crate::model::Objective;
 use crate::tree::BoosterTree;
+
+#[cfg(feature = "infer-row-parallel")]
+const ROW_PARALLEL_MIN_ROWS: usize = 4;
+
+#[cfg(feature = "infer-tree-parallel")]
+const TREE_PARALLEL_MIN_TREES: usize = 8;
 
 /// Predict a batch of rows using a fitted tree ensemble.
 ///
@@ -70,7 +79,45 @@ pub fn predict_dense(
     }
 }
 
+#[cfg(feature = "infer-serial")]
 fn predict_dense_scalar(
+    objective: Objective,
+    base_margin: f64,
+    trees: &[BoosterTree],
+    features: &DenseMatrix,
+) -> Result<Vec<f64>> {
+    predict_dense_scalar_serial(objective, base_margin, trees, features)
+}
+
+#[cfg(feature = "infer-row-parallel")]
+fn predict_dense_scalar(
+    objective: Objective,
+    base_margin: f64,
+    trees: &[BoosterTree],
+    features: &DenseMatrix,
+) -> Result<Vec<f64>> {
+    if features.n_rows() < ROW_PARALLEL_MIN_ROWS {
+        return predict_dense_scalar_serial(objective, base_margin, trees, features);
+    }
+
+    predict_dense_scalar_row_parallel(objective, base_margin, trees, features)
+}
+
+#[cfg(feature = "infer-tree-parallel")]
+fn predict_dense_scalar(
+    objective: Objective,
+    base_margin: f64,
+    trees: &[BoosterTree],
+    features: &DenseMatrix,
+) -> Result<Vec<f64>> {
+    if trees.len() < TREE_PARALLEL_MIN_TREES {
+        return predict_dense_scalar_serial(objective, base_margin, trees, features);
+    }
+
+    predict_dense_scalar_tree_parallel(objective, base_margin, trees, features)
+}
+
+fn predict_dense_scalar_serial(
     objective: Objective,
     base_margin: f64,
     trees: &[BoosterTree],
@@ -98,6 +145,76 @@ fn predict_dense_scalar(
     Ok(predictions)
 }
 
+#[cfg(feature = "infer-row-parallel")]
+fn predict_dense_scalar_row_parallel(
+    objective: Objective,
+    base_margin: f64,
+    trees: &[BoosterTree],
+    features: &DenseMatrix,
+) -> Result<Vec<f64>> {
+    (0..features.n_rows())
+        .into_par_iter()
+        .map(|row_idx| {
+            let mut prediction = base_margin;
+            for (tree_idx, tree) in trees.iter().enumerate() {
+                prediction += predict_tree_row(tree, features, row_idx).map_err(|error| {
+                    error.with_model_context(format!("tree {tree_idx}, row {row_idx}"))
+                })?;
+            }
+
+            match objective {
+                Objective::Regression => Ok(prediction),
+                Objective::BinaryLogistic => Ok(sigmoid(prediction)),
+                Objective::MultiSoftprob { .. } | Objective::MultiSoftmax { .. } => Err(
+                    XgbError::invalid_model_format("multiclass objective is not scalar"),
+                ),
+            }
+        })
+        .collect()
+}
+
+#[cfg(feature = "infer-tree-parallel")]
+fn predict_dense_scalar_tree_parallel(
+    objective: Objective,
+    base_margin: f64,
+    trees: &[BoosterTree],
+    features: &DenseMatrix,
+) -> Result<Vec<f64>> {
+    let chunk_count = usize::min(rayon::current_num_threads(), trees.len());
+    let chunk_ranges = tree_chunk_ranges(trees.len(), chunk_count);
+
+    let mut predictions = Vec::with_capacity(features.n_rows());
+    for row_idx in 0..features.n_rows() {
+        let partials = chunk_ranges
+            .par_iter()
+            .map(|(start, end)| {
+                let mut partial = 0.0;
+                for (offset, tree) in trees[*start..*end].iter().enumerate() {
+                    let tree_idx = *start + offset;
+                    partial += predict_tree_row(tree, features, row_idx).map_err(|error| {
+                        error.with_model_context(format!("tree {tree_idx}, row {row_idx}"))
+                    })?;
+                }
+                Ok(partial)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let prediction = match objective {
+            Objective::Regression => base_margin + kahan_sum(&partials),
+            Objective::BinaryLogistic => sigmoid(base_margin + kahan_sum(&partials)),
+            Objective::MultiSoftprob { .. } | Objective::MultiSoftmax { .. } => {
+                return Err(XgbError::invalid_model_format(
+                    "multiclass objective is not scalar",
+                ));
+            }
+        };
+        predictions.push(prediction);
+    }
+
+    Ok(predictions)
+}
+
+#[cfg(feature = "infer-serial")]
 fn predict_dense_multiclass_margins(
     num_class: usize,
     base_margins: &[f64],
@@ -105,29 +222,72 @@ fn predict_dense_multiclass_margins(
     trees: &[BoosterTree],
     features: &DenseMatrix,
 ) -> Result<Vec<f64>> {
+    predict_dense_multiclass_margins_serial(num_class, base_margins, tree_info, trees, features)
+}
+
+#[cfg(feature = "infer-row-parallel")]
+fn predict_dense_multiclass_margins(
+    num_class: usize,
+    base_margins: &[f64],
+    tree_info: &[usize],
+    trees: &[BoosterTree],
+    features: &DenseMatrix,
+) -> Result<Vec<f64>> {
+    if features.n_rows() < ROW_PARALLEL_MIN_ROWS {
+        return predict_dense_multiclass_margins_serial(
+            num_class,
+            base_margins,
+            tree_info,
+            trees,
+            features,
+        );
+    }
+
+    predict_dense_multiclass_margins_row_parallel(
+        num_class,
+        base_margins,
+        tree_info,
+        trees,
+        features,
+    )
+}
+
+#[cfg(feature = "infer-tree-parallel")]
+fn predict_dense_multiclass_margins(
+    num_class: usize,
+    base_margins: &[f64],
+    tree_info: &[usize],
+    trees: &[BoosterTree],
+    features: &DenseMatrix,
+) -> Result<Vec<f64>> {
+    if trees.len() < TREE_PARALLEL_MIN_TREES {
+        return predict_dense_multiclass_margins_serial(
+            num_class,
+            base_margins,
+            tree_info,
+            trees,
+            features,
+        );
+    }
+
+    predict_dense_multiclass_margins_tree_parallel(
+        num_class,
+        base_margins,
+        tree_info,
+        trees,
+        features,
+    )
+}
+
+fn predict_dense_multiclass_margins_serial(
+    num_class: usize,
+    base_margins: &[f64],
+    tree_info: &[usize],
+    trees: &[BoosterTree],
+    features: &DenseMatrix,
+) -> Result<Vec<f64>> {
     let n_rows = features.n_rows();
-    if base_margins.len() != num_class {
-        return Err(XgbError::invalid_model_format(format!(
-            "multiclass base_margins length mismatch: expected {num_class}, got {}",
-            base_margins.len()
-        )));
-    }
-
-    if tree_info.len() != trees.len() {
-        return Err(XgbError::invalid_model_format(format!(
-            "tree_info length mismatch: expected {}, got {}",
-            trees.len(),
-            tree_info.len()
-        )));
-    }
-
-    let margin_len = n_rows
-        .checked_mul(num_class)
-        .ok_or(XgbError::InvalidShape {
-            context: "multiclass prediction buffer",
-            expected: usize::MAX,
-            actual: n_rows,
-        })?;
+    let margin_len = validate_multiclass_inputs(num_class, base_margins, tree_info, trees, n_rows)?;
     let mut margins = vec![0.0; margin_len];
 
     for row_idx in 0..n_rows {
@@ -153,6 +313,171 @@ fn predict_dense_multiclass_margins(
     }
 
     Ok(margins)
+}
+
+#[cfg(feature = "infer-row-parallel")]
+fn predict_dense_multiclass_margins_row_parallel(
+    num_class: usize,
+    base_margins: &[f64],
+    tree_info: &[usize],
+    trees: &[BoosterTree],
+    features: &DenseMatrix,
+) -> Result<Vec<f64>> {
+    let n_rows = features.n_rows();
+    let margin_len = validate_multiclass_inputs(num_class, base_margins, tree_info, trees, n_rows)?;
+    let mut margins = vec![0.0; margin_len];
+
+    margins.par_chunks_mut(num_class).enumerate().try_for_each(
+        |(row_idx, row_margins)| -> Result<()> {
+            row_margins.copy_from_slice(base_margins);
+
+            for (tree_idx, tree) in trees.iter().enumerate() {
+                let output_group = tree_info[tree_idx];
+                row_margins[output_group] +=
+                    predict_tree_row(tree, features, row_idx).map_err(|error| {
+                        error.with_model_context(format!("tree {tree_idx}, row {row_idx}"))
+                    })?;
+            }
+
+            Ok(())
+        },
+    )?;
+
+    Ok(margins)
+}
+
+#[cfg(feature = "infer-tree-parallel")]
+fn predict_dense_multiclass_margins_tree_parallel(
+    num_class: usize,
+    base_margins: &[f64],
+    tree_info: &[usize],
+    trees: &[BoosterTree],
+    features: &DenseMatrix,
+) -> Result<Vec<f64>> {
+    let n_rows = features.n_rows();
+    let margin_len = validate_multiclass_inputs(num_class, base_margins, tree_info, trees, n_rows)?;
+    let mut margins = vec![0.0; margin_len];
+
+    let chunk_count = usize::min(rayon::current_num_threads(), trees.len());
+    let chunk_ranges = tree_chunk_ranges(trees.len(), chunk_count);
+
+    for row_idx in 0..n_rows {
+        let partials = chunk_ranges
+            .par_iter()
+            .map(|(start, end)| {
+                let mut partial = vec![0.0; num_class];
+                for (offset, tree) in trees[*start..*end].iter().enumerate() {
+                    let tree_idx = *start + offset;
+                    let output_group = tree_info[tree_idx];
+                    partial[output_group] +=
+                        predict_tree_row(tree, features, row_idx).map_err(|error| {
+                            error.with_model_context(format!("tree {tree_idx}, row {row_idx}"))
+                        })?;
+                }
+                Ok(partial)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let start = row_idx * num_class;
+        let end = start + num_class;
+        let row_margins = &mut margins[start..end];
+        row_margins.copy_from_slice(base_margins);
+
+        let mut compensation = vec![0.0; num_class];
+        for partial in partials {
+            for (class_idx, value) in partial.into_iter().enumerate() {
+                let adjusted = value - compensation[class_idx];
+                let updated = row_margins[class_idx] + adjusted;
+                compensation[class_idx] = (updated - row_margins[class_idx]) - adjusted;
+                row_margins[class_idx] = updated;
+            }
+        }
+    }
+
+    Ok(margins)
+}
+
+fn validate_multiclass_inputs(
+    num_class: usize,
+    base_margins: &[f64],
+    tree_info: &[usize],
+    trees: &[BoosterTree],
+    n_rows: usize,
+) -> Result<usize> {
+    if base_margins.len() != num_class {
+        return Err(XgbError::invalid_model_format(format!(
+            "multiclass base_margins length mismatch: expected {num_class}, got {}",
+            base_margins.len()
+        )));
+    }
+
+    if tree_info.len() != trees.len() {
+        return Err(XgbError::invalid_model_format(format!(
+            "tree_info length mismatch: expected {}, got {}",
+            trees.len(),
+            tree_info.len()
+        )));
+    }
+
+    if let Some((tree_idx, output_group)) = tree_info
+        .iter()
+        .enumerate()
+        .find(|(_, output_group)| **output_group >= num_class)
+    {
+        return Err(XgbError::invalid_model_format(format!(
+            "tree_info[{tree_idx}] out of bounds for {num_class} classes: {output_group}",
+        )));
+    }
+
+    let margin_len = n_rows
+        .checked_mul(num_class)
+        .ok_or(XgbError::InvalidShape {
+            context: "multiclass prediction buffer",
+            expected: usize::MAX,
+            actual: n_rows,
+        })?;
+
+    Ok(margin_len)
+}
+
+#[cfg(feature = "infer-tree-parallel")]
+fn tree_chunk_ranges(num_trees: usize, chunk_count: usize) -> Vec<(usize, usize)> {
+    if num_trees == 0 || chunk_count == 0 {
+        return Vec::new();
+    }
+
+    let base_size = num_trees / chunk_count;
+    let remainder = num_trees % chunk_count;
+    let mut chunk_ranges = Vec::with_capacity(chunk_count);
+    let mut start = 0;
+
+    for chunk_idx in 0..chunk_count {
+        let chunk_size = base_size + usize::from(chunk_idx < remainder);
+        if chunk_size == 0 {
+            continue;
+        }
+
+        let end = start + chunk_size;
+        chunk_ranges.push((start, end));
+        start = end;
+    }
+
+    chunk_ranges
+}
+
+#[cfg(feature = "infer-tree-parallel")]
+fn kahan_sum(values: &[f64]) -> f64 {
+    let mut sum = 0.0;
+    let mut compensation = 0.0;
+
+    for value in values {
+        let adjusted = *value - compensation;
+        let updated = sum + adjusted;
+        compensation = (updated - sum) - adjusted;
+        sum = updated;
+    }
+
+    sum
 }
 
 fn softmax_in_place(values: &mut [f64]) {
@@ -373,5 +698,40 @@ mod tests {
             panic!("expected InvalidModelFormat error")
         };
         assert!(message.contains("tree 0, row 0"));
+    }
+
+    #[cfg(feature = "infer-tree-parallel")]
+    #[test]
+    fn tree_parallel_predictions_are_deterministic_across_runs() {
+        let trees = (0..32)
+            .map(|index| BoosterTree {
+                nodes: vec![TreeNode::leaf(f64::from(index) * 0.01)],
+            })
+            .collect::<Vec<_>>();
+        let tree_info = vec![0; trees.len()];
+        let features = DenseMatrix::from_shape_vec(3, 1, vec![0.0, 1.0, 2.0]).unwrap();
+
+        let baseline = predict_dense(
+            Objective::Regression,
+            &[0.5],
+            &tree_info,
+            &trees,
+            &features,
+            1,
+        )
+        .unwrap();
+
+        for _ in 0..20 {
+            let current = predict_dense(
+                Objective::Regression,
+                &[0.5],
+                &tree_info,
+                &trees,
+                &features,
+                1,
+            )
+            .unwrap();
+            assert_eq!(current, baseline);
+        }
     }
 }

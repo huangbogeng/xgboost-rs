@@ -17,8 +17,12 @@ Thanks for your interest in contributing to `xgboost-rs`.
 
 ```bash
 cargo fmt --all
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets --all-features
+cargo clippy --all-targets --no-default-features --features infer-serial -- -D warnings
+cargo clippy --all-targets --no-default-features --features infer-row-parallel -- -D warnings
+cargo clippy --all-targets --no-default-features --features infer-tree-parallel -- -D warnings
+cargo test --all-targets --no-default-features --features infer-serial
+cargo test --all-targets --no-default-features --features infer-row-parallel
+cargo test --all-targets --no-default-features --features infer-tree-parallel
 ```
 
 ## Pull Request Guidelines
