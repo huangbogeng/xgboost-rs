@@ -12,11 +12,14 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - Prediction traversal now returns structured errors for malformed trees instead of panicking at runtime.
 - Malformed-model errors now include richer context (for example tree/node/row indices) to improve debugging.
 - Prediction paths now validate internal shape invariants defensively to avoid panic on inconsistent internal state.
+- CI now validates each inference backend feature set separately instead of using `--all-features`.
 
 ### Added
 
 - Additional malformed-model tests covering constructor validation and panic-free tree traversal.
 - Panic-free indexing APIs on `DenseMatrix`: `try_row` and `try_value`.
+- Compile-time selectable inference backends: `infer-serial`, `infer-row-parallel`, and `infer-tree-parallel`.
+- Deterministic tree-parallel reduction tests to ensure stable outputs across repeated runs.
 
 ## [0.2.0] - 2026-04-21
 
