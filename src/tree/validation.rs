@@ -18,7 +18,7 @@ where
     F: FnMut(usize) -> Result<Option<(usize, usize)>>,
 {
     if num_nodes == 0 {
-        return Err(XgbError::InvalidModelFormat(
+        return Err(XgbError::invalid_model_format(
             "trees must contain at least one node",
         ));
     }
@@ -33,7 +33,9 @@ where
                 match visit_state[node_idx] {
                     VisitState::Unvisited => {}
                     VisitState::Visiting => {
-                        return Err(XgbError::InvalidModelFormat("tree contains a cycle"));
+                        return Err(XgbError::invalid_model_format(format!(
+                            "tree contains a cycle at node index {node_idx}",
+                        )));
                     }
                     VisitState::Visited => continue,
                 }
@@ -45,28 +47,28 @@ where
                     }
                     Some((left_child, right_child)) => {
                         if left_child >= num_nodes {
-                            return Err(XgbError::InvalidModelFormat(
-                                "left child index out of bounds",
-                            ));
+                            return Err(XgbError::invalid_model_format(format!(
+                                "left child index out of bounds at node {node_idx}: left_child={left_child}, node_count={num_nodes}",
+                            )));
                         }
                         if right_child >= num_nodes {
-                            return Err(XgbError::InvalidModelFormat(
-                                "right child index out of bounds",
-                            ));
+                            return Err(XgbError::invalid_model_format(format!(
+                                "right child index out of bounds at node {node_idx}: right_child={right_child}, node_count={num_nodes}",
+                            )));
                         }
 
                         indegree[left_child] += 1;
                         if indegree[left_child] > 1 {
-                            return Err(XgbError::InvalidModelFormat(
-                                "tree nodes must have exactly one parent",
-                            ));
+                            return Err(XgbError::invalid_model_format(format!(
+                                "tree nodes must have exactly one parent: node {left_child} has multiple parents",
+                            )));
                         }
 
                         indegree[right_child] += 1;
                         if indegree[right_child] > 1 {
-                            return Err(XgbError::InvalidModelFormat(
-                                "tree nodes must have exactly one parent",
-                            ));
+                            return Err(XgbError::invalid_model_format(format!(
+                                "tree nodes must have exactly one parent: node {right_child} has multiple parents",
+                            )));
                         }
 
                         stack.push(TraversalStep::Exit(node_idx));
@@ -82,9 +84,13 @@ where
     }
 
     if visit_state.contains(&VisitState::Unvisited) {
-        return Err(XgbError::InvalidModelFormat(
-            "tree contains unreachable nodes",
-        ));
+        let first_unreachable = visit_state
+            .iter()
+            .position(|state| *state == VisitState::Unvisited)
+            .unwrap_or(0);
+        return Err(XgbError::invalid_model_format(format!(
+            "tree contains unreachable nodes starting at node index {first_unreachable}",
+        )));
     }
 
     Ok(())

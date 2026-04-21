@@ -90,7 +90,7 @@ impl XgbModel {
         }
 
         if tree_info.iter().any(|group| *group >= expected_groups) {
-            return Err(XgbError::InvalidModelFormat(
+            return Err(XgbError::invalid_model_format(
                 "tree_info contains out-of-range output group index",
             ));
         }
@@ -102,8 +102,9 @@ impl XgbModel {
             });
         }
 
-        for tree in &trees {
-            validate_tree_structure(tree, n_features)?;
+        for (tree_idx, tree) in trees.iter().enumerate() {
+            validate_tree_structure(tree, n_features)
+                .map_err(|error| error.with_model_context(format!("tree {tree_idx}")))?;
         }
 
         Ok(Self {
@@ -195,18 +196,20 @@ fn validate_tree_structure(tree: &BoosterTree, n_features: usize) -> Result<()> 
         let node = &tree.nodes[node_idx];
 
         if let Some(leaf_value) = node.leaf_value {
-            validate_leaf_node(node, leaf_value)?;
+            validate_leaf_node(node, leaf_value)
+                .map_err(|error| error.with_model_context(format!("node {node_idx}")))?;
             return Ok(None);
         }
 
-        let children = validate_split_node(node, n_features)?;
+        let children = validate_split_node(node, n_features)
+            .map_err(|error| error.with_model_context(format!("node {node_idx}")))?;
         Ok(Some(children))
     })
 }
 
 fn validate_leaf_node(node: &TreeNode, leaf_value: f64) -> Result<()> {
     if !leaf_value.is_finite() {
-        return Err(XgbError::InvalidModelFormat("leaf value must be finite"));
+        return Err(XgbError::invalid_model_format("leaf value must be finite"));
     }
 
     if node.split_feature.is_some()
@@ -215,7 +218,7 @@ fn validate_leaf_node(node: &TreeNode, leaf_value: f64) -> Result<()> {
         || node.left_child.is_some()
         || node.right_child.is_some()
     {
-        return Err(XgbError::InvalidModelFormat(
+        return Err(XgbError::invalid_model_format(
             "leaf nodes must not contain split metadata",
         ));
     }
@@ -224,34 +227,34 @@ fn validate_leaf_node(node: &TreeNode, leaf_value: f64) -> Result<()> {
 }
 
 fn validate_split_node(node: &TreeNode, n_features: usize) -> Result<(usize, usize)> {
-    let split_feature = node.split_feature.ok_or(XgbError::InvalidModelFormat(
-        "split nodes must contain split_feature",
-    ))?;
+    let split_feature = node
+        .split_feature
+        .ok_or_else(|| XgbError::invalid_model_format("split nodes must contain split_feature"))?;
     if split_feature >= n_features {
-        return Err(XgbError::InvalidModelFormat(
-            "split feature index out of bounds",
-        ));
+        return Err(XgbError::invalid_model_format(format!(
+            "split feature index out of bounds: split_feature={split_feature}, feature_count={n_features}",
+        )));
     }
 
     if node.split_bin.is_some() {
-        return Err(XgbError::InvalidModelFormat(
+        return Err(XgbError::invalid_model_format(
             "split_bin is unsupported for inference",
         ));
     }
 
-    let split_value = node.split_value.ok_or(XgbError::InvalidModelFormat(
-        "split nodes must contain split_value",
-    ))?;
+    let split_value = node
+        .split_value
+        .ok_or_else(|| XgbError::invalid_model_format("split nodes must contain split_value"))?;
     if !split_value.is_finite() {
-        return Err(XgbError::InvalidModelFormat("split value must be finite"));
+        return Err(XgbError::invalid_model_format("split value must be finite"));
     }
 
-    let left_child = node.left_child.ok_or(XgbError::InvalidModelFormat(
-        "split nodes must contain left_child",
-    ))?;
-    let right_child = node.right_child.ok_or(XgbError::InvalidModelFormat(
-        "split nodes must contain right_child",
-    ))?;
+    let left_child = node
+        .left_child
+        .ok_or_else(|| XgbError::invalid_model_format("split nodes must contain left_child"))?;
+    let right_child = node
+        .right_child
+        .ok_or_else(|| XgbError::invalid_model_format("split nodes must contain right_child"))?;
 
     Ok((left_child, right_child))
 }
@@ -298,6 +301,29 @@ mod tests {
         let error = XgbModel::new(0.0, 1, vec![tree]).unwrap_err();
 
         assert!(matches!(error, XgbError::InvalidModelFormat(_)));
+    }
+
+    #[test]
+    fn constructor_error_includes_tree_and_node_context() {
+        let tree = BoosterTree {
+            nodes: vec![TreeNode {
+                split_feature: None,
+                split_bin: None,
+                split_value: Some(1.0),
+                left_child: Some(1),
+                right_child: Some(2),
+                leaf_value: None,
+                default_left: true,
+            }],
+        };
+
+        let error = XgbModel::new(0.0, 1, vec![tree]).unwrap_err();
+
+        let XgbError::InvalidModelFormat(message) = error else {
+            panic!("expected InvalidModelFormat error")
+        };
+        assert!(message.contains("tree 0"));
+        assert!(message.contains("node 0"));
     }
 
     #[test]

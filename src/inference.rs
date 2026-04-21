@@ -31,6 +31,13 @@ pub fn predict_dense(
 
     match objective {
         Objective::Regression | Objective::BinaryLogistic => {
+            if base_margins.len() != 1 {
+                return Err(XgbError::invalid_model_format(format!(
+                    "scalar objectives require exactly one base margin, got {}",
+                    base_margins.len()
+                )));
+            }
+
             predict_dense_scalar(objective, base_margins[0], trees, features)
         }
         Objective::MultiSoftprob { num_class } => {
@@ -71,15 +78,17 @@ fn predict_dense_scalar(
 ) -> Result<Vec<f64>> {
     let mut predictions = vec![base_margin; features.n_rows()];
     for (row_idx, prediction) in predictions.iter_mut().enumerate() {
-        for tree in trees {
-            *prediction += predict_tree_row(tree, features, row_idx)?;
+        for (tree_idx, tree) in trees.iter().enumerate() {
+            *prediction += predict_tree_row(tree, features, row_idx).map_err(|error| {
+                error.with_model_context(format!("tree {tree_idx}, row {row_idx}"))
+            })?;
         }
 
         *prediction = match objective {
             Objective::Regression => *prediction,
             Objective::BinaryLogistic => sigmoid(*prediction),
             Objective::MultiSoftprob { .. } | Objective::MultiSoftmax { .. } => {
-                return Err(XgbError::InvalidModelFormat(
+                return Err(XgbError::invalid_model_format(
                     "multiclass objective is not scalar",
                 ));
             }
@@ -97,7 +106,29 @@ fn predict_dense_multiclass_margins(
     features: &DenseMatrix,
 ) -> Result<Vec<f64>> {
     let n_rows = features.n_rows();
-    let mut margins = vec![0.0; n_rows * num_class];
+    if base_margins.len() != num_class {
+        return Err(XgbError::invalid_model_format(format!(
+            "multiclass base_margins length mismatch: expected {num_class}, got {}",
+            base_margins.len()
+        )));
+    }
+
+    if tree_info.len() != trees.len() {
+        return Err(XgbError::invalid_model_format(format!(
+            "tree_info length mismatch: expected {}, got {}",
+            trees.len(),
+            tree_info.len()
+        )));
+    }
+
+    let margin_len = n_rows
+        .checked_mul(num_class)
+        .ok_or(XgbError::InvalidShape {
+            context: "multiclass prediction buffer",
+            expected: usize::MAX,
+            actual: n_rows,
+        })?;
+    let mut margins = vec![0.0; margin_len];
 
     for row_idx in 0..n_rows {
         let start = row_idx * num_class;
@@ -107,9 +138,17 @@ fn predict_dense_multiclass_margins(
 
     for (tree_idx, tree) in trees.iter().enumerate() {
         let output_group = tree_info[tree_idx];
+        if output_group >= num_class {
+            return Err(XgbError::invalid_model_format(format!(
+                "tree_info[{tree_idx}] out of bounds for {num_class} classes: {output_group}",
+            )));
+        }
+
         for row_idx in 0..n_rows {
             let margin_idx = row_idx * num_class + output_group;
-            margins[margin_idx] += predict_tree_row(tree, features, row_idx)?;
+            margins[margin_idx] += predict_tree_row(tree, features, row_idx).map_err(|error| {
+                error.with_model_context(format!("tree {tree_idx}, row {row_idx}"))
+            })?;
         }
     }
 
@@ -168,7 +207,7 @@ pub fn predict_tree_row(tree: &BoosterTree, features: &DenseMatrix, row_idx: usi
     }
 
     if tree.nodes.is_empty() {
-        return Err(XgbError::InvalidModelFormat(
+        return Err(XgbError::invalid_model_format(
             "trees must contain at least one node",
         ));
     }
@@ -177,54 +216,65 @@ pub fn predict_tree_row(tree: &BoosterTree, features: &DenseMatrix, row_idx: usi
     let mut steps = 0;
 
     loop {
-        let node = tree
-            .nodes
-            .get(node_idx)
-            .ok_or(XgbError::InvalidModelFormat(
-                "tree node index out of bounds",
-            ))?;
+        let node = tree.nodes.get(node_idx).ok_or_else(|| {
+            XgbError::invalid_model_format(format!(
+                "tree node index out of bounds: node_idx={node_idx}, node_count={}",
+                tree.nodes.len()
+            ))
+        })?;
 
         if let Some(value) = node.leaf_value {
             return Ok(value);
         }
 
         if steps >= tree.nodes.len() {
-            return Err(XgbError::InvalidModelFormat(
-                "tree traversal exceeded node count",
-            ));
+            return Err(XgbError::invalid_model_format(format!(
+                "tree traversal exceeded node count at node index {node_idx}",
+            )));
         }
         steps += 1;
 
-        let split_feature = node.split_feature.ok_or(XgbError::InvalidModelFormat(
-            "split nodes must contain split_feature",
-        ))?;
+        let split_feature = node.split_feature.ok_or_else(|| {
+            XgbError::invalid_model_format(format!(
+                "split node at index {node_idx} must contain split_feature",
+            ))
+        })?;
         if split_feature >= features.n_cols() {
-            return Err(XgbError::InvalidModelFormat(
-                "split feature index out of bounds",
-            ));
+            return Err(XgbError::invalid_model_format(format!(
+                "split feature index out of bounds at node {node_idx}: split_feature={split_feature}, feature_count={}",
+                features.n_cols()
+            )));
         }
 
-        let split_value = node.split_value.ok_or(XgbError::InvalidModelFormat(
-            "split nodes must contain split_value",
-        ))?;
+        let split_value = node.split_value.ok_or_else(|| {
+            XgbError::invalid_model_format(format!(
+                "split node at index {node_idx} must contain split_value",
+            ))
+        })?;
         if !split_value.is_finite() {
-            return Err(XgbError::InvalidModelFormat("split value must be finite"));
+            return Err(XgbError::invalid_model_format(format!(
+                "split value must be finite at node index {node_idx}",
+            )));
         }
 
-        let feature_value = features.value(row_idx, split_feature);
+        let feature_value = features.try_value(row_idx, split_feature)?;
         let goes_left = if features.is_missing_value(feature_value) {
             node.default_left
         } else {
             xgb_less_than(feature_value, split_value)
         };
         let next_idx = if goes_left {
-            node.left_child.ok_or(XgbError::InvalidModelFormat(
-                "split nodes must contain left_child",
-            ))?
+            node.left_child.ok_or_else(|| {
+                XgbError::invalid_model_format(format!(
+                    "split node at index {node_idx} must contain left_child",
+                ))
+            })?
         } else {
-            node.right_child.ok_or(XgbError::InvalidModelFormat(
-                "split nodes must contain right_child",
-            ))?
+            node.right_child.ok_or_else(|| {
+                XgbError::invalid_model_format(format!(
+                    "split node at index {node_idx} must contain right_child",
+                ))
+            })?
         };
         node_idx = next_idx;
     }
@@ -251,9 +301,10 @@ pub(crate) fn sigmoid(value: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::predict_tree_row;
+    use super::{predict_dense, predict_tree_row};
     use crate::dataset::DenseMatrix;
     use crate::error::XgbError;
+    use crate::model::Objective;
     use crate::tree::{BoosterTree, TreeNode};
 
     #[test]
@@ -298,5 +349,29 @@ mod tests {
         let error = predict_tree_row(&tree, &features, 0).unwrap_err();
 
         assert!(matches!(error, XgbError::InvalidModelFormat(_)));
+    }
+
+    #[test]
+    fn predict_dense_error_includes_tree_and_row_context() {
+        let tree = BoosterTree {
+            nodes: vec![TreeNode {
+                split_feature: None,
+                split_bin: None,
+                split_value: Some(1.0),
+                left_child: Some(1),
+                right_child: Some(2),
+                leaf_value: None,
+                default_left: true,
+            }],
+        };
+        let features = DenseMatrix::from_shape_vec(1, 1, vec![0.0]).unwrap();
+
+        let error =
+            predict_dense(Objective::Regression, &[0.0], &[0], &[tree], &features, 1).unwrap_err();
+
+        let XgbError::InvalidModelFormat(message) = error else {
+            panic!("expected InvalidModelFormat error")
+        };
+        assert!(message.contains("tree 0, row 0"));
     }
 }
