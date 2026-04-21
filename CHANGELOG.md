@@ -6,6 +6,15 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Changed
+
+- `XgbModel::new` now validates input tree structures up front and returns explicit errors for invalid nodes, cycles, unreachable nodes, and non-finite split/leaf values.
+- Prediction traversal now returns structured errors for malformed trees instead of panicking at runtime.
+
+### Added
+
+- Additional malformed-model tests covering constructor validation and panic-free tree traversal.
+
 ## [0.2.0] - 2026-04-21
 
 ### Added

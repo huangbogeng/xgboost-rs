@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::error::{Result, XgbError};
 use crate::model::{Objective, XgbModel};
-use crate::tree::{BoosterTree, TreeNode};
+use crate::tree::{BoosterTree, TreeNode, validate_tree_topology};
 
 use super::schema::{JsonModel, JsonTree};
 
@@ -143,7 +143,32 @@ fn build_tree_from_json(
     validate_array_len(tree.base_weights.len(), num_nodes, "base_weights")?;
     validate_array_len(tree.default_left.len(), num_nodes, "default_left")?;
     validate_array_len(tree.split_type.len(), num_nodes, "split_type")?;
-    validate_tree_structure(&tree, num_nodes)?;
+    validate_tree_topology(num_nodes, |node_idx| {
+        let default_left = tree.default_left[node_idx];
+        if default_left > 1 {
+            return Err(XgbError::InvalidModelFormat(
+                "default_left must be encoded as 0 or 1",
+            ));
+        }
+
+        let left = tree.left_children[node_idx];
+        let right = tree.right_children[node_idx];
+        match (left, right) {
+            (-1, -1) => Ok(None),
+            (-1, _) | (_, -1) => Err(XgbError::InvalidModelFormat(
+                "split nodes must contain both children",
+            )),
+            (left, right) => {
+                let left_child = usize::try_from(left).map_err(|_| {
+                    XgbError::InvalidModelFormat("left child index must be non-negative")
+                })?;
+                let right_child = usize::try_from(right).map_err(|_| {
+                    XgbError::InvalidModelFormat("right child index must be non-negative")
+                })?;
+                Ok(Some((left_child, right_child)))
+            }
+        }
+    })?;
 
     let nodes = (0..num_nodes)
         .map(|node_idx| build_node_from_json(&tree, node_idx, num_nodes, n_features))
@@ -287,117 +312,6 @@ fn validate_array_len(actual: usize, expected: usize, context: &'static str) -> 
             expected,
             actual,
         });
-    }
-
-    Ok(())
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum VisitState {
-    Unvisited,
-    Visiting,
-    Visited,
-}
-
-#[derive(Clone, Copy)]
-enum TraversalStep {
-    Enter(usize),
-    Exit(usize),
-}
-
-fn validate_tree_structure(tree: &JsonTree, num_nodes: usize) -> Result<()> {
-    if num_nodes == 0 {
-        return Err(XgbError::InvalidModelFormat(
-            "trees must contain at least one node",
-        ));
-    }
-
-    let mut visit_state = vec![VisitState::Unvisited; num_nodes];
-    let mut indegree = vec![0usize; num_nodes];
-    let mut stack = vec![TraversalStep::Enter(0)];
-
-    while let Some(step) = stack.pop() {
-        match step {
-            TraversalStep::Enter(node_idx) => {
-                match visit_state[node_idx] {
-                    VisitState::Unvisited => {}
-                    VisitState::Visiting => {
-                        return Err(XgbError::InvalidModelFormat("tree contains a cycle"));
-                    }
-                    VisitState::Visited => {
-                        continue;
-                    }
-                }
-
-                visit_state[node_idx] = VisitState::Visiting;
-
-                let default_left = tree.default_left[node_idx];
-                if default_left > 1 {
-                    return Err(XgbError::InvalidModelFormat(
-                        "default_left must be encoded as 0 or 1",
-                    ));
-                }
-
-                let left = tree.left_children[node_idx];
-                let right = tree.right_children[node_idx];
-                match (left, right) {
-                    (-1, -1) => {
-                        visit_state[node_idx] = VisitState::Visited;
-                    }
-                    (-1, _) | (_, -1) => {
-                        return Err(XgbError::InvalidModelFormat(
-                            "split nodes must contain both children",
-                        ));
-                    }
-                    (left, right) => {
-                        let left_child = usize::try_from(left).map_err(|_| {
-                            XgbError::InvalidModelFormat("left child index must be non-negative")
-                        })?;
-                        let right_child = usize::try_from(right).map_err(|_| {
-                            XgbError::InvalidModelFormat("right child index must be non-negative")
-                        })?;
-
-                        if left_child >= num_nodes {
-                            return Err(XgbError::InvalidModelFormat(
-                                "left child index out of bounds",
-                            ));
-                        }
-                        if right_child >= num_nodes {
-                            return Err(XgbError::InvalidModelFormat(
-                                "right child index out of bounds",
-                            ));
-                        }
-
-                        indegree[left_child] += 1;
-                        if indegree[left_child] > 1 {
-                            return Err(XgbError::InvalidModelFormat(
-                                "tree nodes must have exactly one parent",
-                            ));
-                        }
-
-                        indegree[right_child] += 1;
-                        if indegree[right_child] > 1 {
-                            return Err(XgbError::InvalidModelFormat(
-                                "tree nodes must have exactly one parent",
-                            ));
-                        }
-
-                        stack.push(TraversalStep::Exit(node_idx));
-                        stack.push(TraversalStep::Enter(right_child));
-                        stack.push(TraversalStep::Enter(left_child));
-                    }
-                }
-            }
-            TraversalStep::Exit(node_idx) => {
-                visit_state[node_idx] = VisitState::Visited;
-            }
-        }
-    }
-
-    if visit_state.contains(&VisitState::Unvisited) {
-        return Err(XgbError::InvalidModelFormat(
-            "tree contains unreachable nodes",
-        ));
     }
 
     Ok(())

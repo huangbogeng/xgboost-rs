@@ -167,6 +167,140 @@ mod tests {
     }
 
     #[test]
+    fn rejects_unsupported_gradient_booster() {
+        let mut model: Value = serde_json::from_str(&wrap_single_tree(
+            &leaf_tree(0.0),
+            "reg:squarederror",
+            "0.5",
+            0,
+            1,
+            1,
+            &[0],
+        ))
+        .unwrap();
+        model["learner"]["gradient_booster"]["name"] = json!("gblinear");
+        let json = model.to_string();
+
+        let error = load_model_from_json(&json).unwrap_err();
+
+        assert!(matches!(
+            error,
+            XgbError::UnsupportedModel {
+                context: "gradient booster",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_unsupported_objective() {
+        let json = wrap_single_tree(&leaf_tree(0.0), "rank:pairwise", "0.5", 0, 1, 1, &[0]);
+
+        let error = load_model_from_json(&json).unwrap_err();
+
+        assert!(matches!(
+            error,
+            XgbError::UnsupportedModel {
+                context: "objective",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_multi_target_models() {
+        let json = wrap_single_tree(&leaf_tree(0.0), "reg:squarederror", "0.5", 0, 1, 2, &[0]);
+
+        let error = load_model_from_json(&json).unwrap_err();
+
+        assert!(matches!(
+            error,
+            XgbError::UnsupportedModel {
+                context: "num_target",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_unsupported_split_type() {
+        let json = wrap_regression_single_tree(&json!({
+            "base_weights": [0.0, -1.0, 1.0],
+            "default_left": [0, 0, 0],
+            "id": 0,
+            "left_children": [1, -1, -1],
+            "right_children": [2, -1, -1],
+            "split_conditions": [1.0, -1.0, 1.0],
+            "split_indices": [0, 0, 0],
+            "split_type": [1, 0, 0],
+            "tree_param": {
+                "num_nodes": "3",
+                "size_leaf_vector": "1",
+            },
+        }));
+
+        let error = load_model_from_json(&json).unwrap_err();
+
+        assert!(matches!(
+            error,
+            XgbError::UnsupportedModel {
+                context: "split_type",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_leaf_vector_size_larger_than_one() {
+        let json = wrap_regression_single_tree(&json!({
+            "base_weights": [0.0],
+            "default_left": [0],
+            "id": 0,
+            "left_children": [-1],
+            "right_children": [-1],
+            "split_conditions": [0.0],
+            "split_indices": [0],
+            "split_type": [0],
+            "tree_param": {
+                "num_nodes": "1",
+                "size_leaf_vector": "2",
+            },
+        }));
+
+        let error = load_model_from_json(&json).unwrap_err();
+
+        assert!(matches!(
+            error,
+            XgbError::UnsupportedModel {
+                context: "tree_param.size_leaf_vector",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_tree_id_position_mismatch() {
+        let json = wrap_regression_single_tree(&json!({
+            "base_weights": [0.0],
+            "default_left": [0],
+            "id": 1,
+            "left_children": [-1],
+            "right_children": [-1],
+            "split_conditions": [0.0],
+            "split_indices": [0],
+            "split_type": [0],
+            "tree_param": {
+                "num_nodes": "1",
+                "size_leaf_vector": "1",
+            },
+        }));
+
+        let error = load_model_from_json(&json).unwrap_err();
+
+        assert!(matches!(error, XgbError::InvalidModelFormat(_)));
+    }
+
+    #[test]
     fn rejects_tree_cycles() {
         let json = wrap_regression_single_tree(&json!({
             "base_weights": [0.0, 1.0],
